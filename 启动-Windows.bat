@@ -9,7 +9,7 @@ cd /d "%ROOT%"
 echo ============================================
 echo    Schedule Helper - Automatic Capture
 echo ============================================
-echo    Build: 2026.07.15-browser-7
+echo    Build: 2026.07.15-browser-8
 echo    Copyright (c) 2026 Jiapeng Lee
 echo    GitHub: https://github.com/awymp3/swu-schedule-export
 echo    Email: wadrqhh@gmail.com
@@ -24,11 +24,6 @@ set "PYTHON_OFFICIAL=https://www.python.org/ftp/python/%PYTHON_VERSION%"
 set "PIP_WHEEL_NAME=pip-25.3-py3-none-any.whl"
 set "PIP_WHEEL_TUNA=https://pypi.tuna.tsinghua.edu.cn/packages/44/3c/d717024885424591d5376220b5e836c2d5293ce2011523c9de23ff7bf068/%PIP_WHEEL_NAME%"
 set "PIP_WHEEL_ALIYUN=https://mirrors.aliyun.com/pypi/packages/44/3c/d717024885424591d5376220b5e836c2d5293ce2011523c9de23ff7bf068/%PIP_WHEEL_NAME%"
-REM TUNA currently provides undetected-chromedriver 3.1.6. It requires the
-REM legacy Selenium constructor retained by 4.9.1; keep the pair compatible.
-set "UC_PACKAGE=undetected-chromedriver==3.1.6"
-set "SELENIUM_PACKAGE=selenium==4.9.1"
-
 set "PY="
 set "PIP_SCOPE=--user"
 set "NEED_X64=0"
@@ -69,10 +64,8 @@ if errorlevel 1 (
 
 echo Checking dependencies...
 set "NEED="
-%PY% -c "import setuptools" >nul 2>&1 || set "NEED=%NEED% setuptools"
-%PY% -c "import setuptools, undetected_chromedriver; raise SystemExit(0 if undetected_chromedriver.__version__ == '3.1.6' else 1)" >nul 2>&1 || set "NEED=%NEED% %UC_PACKAGE%"
 %PY% -c "import ddddocr" >nul 2>&1 || set "NEED=%NEED% ddddocr"
-%PY% -c "import selenium; raise SystemExit(0 if selenium.__version__ == '4.9.1' else 1)" >nul 2>&1 || set "NEED=%NEED% %SELENIUM_PACKAGE%"
+%PY% -c "import selenium" >nul 2>&1 || set "NEED=%NEED% selenium"
 %PY% -c "import PIL" >nul 2>&1 || set "NEED=%NEED% pillow"
 
 if not "%NEED%"=="" (

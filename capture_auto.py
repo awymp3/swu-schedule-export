@@ -31,6 +31,9 @@ import urllib.request
 import threading
 from html import unescape
 
+IS_MAC = platform.system().lower() == "darwin"
+IS_WIN = platform.system().lower() == "windows"
+
 # 关闭 SSL 证书校验（避免本机缺少 CA 证书导致请求失败）
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -40,22 +43,6 @@ from PIL import Image as _PILImage
 if not hasattr(_PILImage, "ANTIALIAS"):
     _PILImage.ANTIALIAS = _PILImage.LANCZOS
 
-# Python 3.12 移除了标准库 distutils，但 undetected-chromedriver 仍会导入
-# distutils.version。setuptools 提供兼容实现；这里在导入第三方库前注册它。
-try:
-    import distutils.version  # Python 3.11 及更早版本
-except ModuleNotFoundError:
-    try:
-        import setuptools._distutils as _setuptools_distutils
-        import setuptools._distutils.version as _setuptools_distutils_version
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "缺少 setuptools，无法为 Python 3.12+ 提供 distutils 兼容层。"
-        ) from exc
-    sys.modules.setdefault("distutils", _setuptools_distutils)
-    sys.modules.setdefault("distutils.version", _setuptools_distutils_version)
-
-import undetected_chromedriver as uc
 import ddddocr
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -63,6 +50,24 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+# Windows 使用 Selenium + 同版本 chromedriver，避开镜像中旧版 UC 3.1.6 的兼容问题。
+# macOS/Linux 维持原先已验证可用的 undetected-chromedriver 路径。
+if not IS_WIN:
+    # Python 3.12 移除了标准库 distutils，但旧版 UC 仍会导入 distutils.version。
+    try:
+        import distutils.version
+    except ModuleNotFoundError:
+        try:
+            import setuptools._distutils as _setuptools_distutils
+            import setuptools._distutils.version as _setuptools_distutils_version
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("缺少 setuptools，无法为 Python 3.12+ 提供 distutils 兼容层。") from exc
+        sys.modules.setdefault("distutils", _setuptools_distutils)
+        sys.modules.setdefault("distutils.version", _setuptools_distutils_version)
+    import undetected_chromedriver as uc
+else:
+    uc = None
 
 # ================= 配置 =================
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,7 +82,7 @@ CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
 # 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
 CFT_FALLBACK_VERSION = "152.0.7951.0"
 # 每次启动都会打印，用来确认没有误运行旧下载包中的脚本。
-BUILD_TAG = "2026.07.15-browser-7"
+BUILD_TAG = "2026.07.15-browser-8"
 
 # 强制直连：不读取、不探测、也不使用系统或本地代理。
 # 教务系统、镜像下载和 chromedriver 本地通信均直接连接。
@@ -138,25 +143,22 @@ def force_kill_chrome():
 
 
 # ===== 跨平台 chromedriver 准备 =====
-IS_MAC = platform.system().lower() == "darwin"
-IS_WIN = platform.system().lower() == "windows"
-
-
-class MacFixPatcher(uc.Patcher):
-    """Mac 上 uc 在线 patch 会破坏签名导致 driver 被 -9 杀，patch 后重新签名。"""
-    def auto(self, *args, **kwargs):
-        result = super().auto(*args, **kwargs)
-        if IS_MAC:
-            try:
-                path = self.executable_path
-                os.system(f"xattr -c '{path}' 2>/dev/null")
-                os.chmod(path, 0o755)
-                subprocess.run(f"codesign --force --deep --sign - '{path}'",
-                               shell=True, capture_output=True)
-            except Exception:
-                pass
-        return result
-uc.Patcher = MacFixPatcher
+if not IS_WIN:
+    class MacFixPatcher(uc.Patcher):
+        """Mac 上 uc 在线 patch 会破坏签名导致 driver 被 -9 杀，patch 后重新签名。"""
+        def auto(self, *args, **kwargs):
+            result = super().auto(*args, **kwargs)
+            if IS_MAC:
+                try:
+                    path = self.executable_path
+                    os.system(f"xattr -c '{path}' 2>/dev/null")
+                    os.chmod(path, 0o755)
+                    subprocess.run(f"codesign --force --deep --sign - '{path}'",
+                                   shell=True, capture_output=True)
+                except Exception:
+                    pass
+            return result
+    uc.Patcher = MacFixPatcher
 
 
 def _chrome_major(executable):
@@ -455,22 +457,37 @@ def start_chrome_with_watchdog(options, kwargs, timeout=45):
     )
 
 
-def start_portable_windows_chrome(browser_path, driver_path):
-    """项目 Chrome for Testing 与同版本驱动直接配对，不经过 UC 的补丁流程。"""
+def start_windows_chrome(browser_path, driver_path):
+    """Windows 统一用标准 Selenium 驱动指定 Chrome，不依赖旧版 UC。"""
     if not browser_path or not driver_path:
-        raise RuntimeError("项目 Chrome 启动缺少浏览器或 chromedriver 路径。")
+        raise RuntimeError("Windows Chrome 启动缺少浏览器或 chromedriver 路径。")
     options = webdriver.ChromeOptions()
     options.binary_location = browser_path
     options.add_argument("--disable-popup-blocking")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
+    options.add_argument("--no-proxy-server")
+    options.add_argument("--proxy-bypass-list=*")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    # Chrome for Testing 与 chromedriver 是严格同版本配套的，直接使用 Selenium。
-    # 这里可以安全放入看门狗线程：Selenium 通过本地 HTTP 通信，不依赖 UC 的主线程补丁流程。
-    # 因此浏览器或驱动异常时，终端会持续显示连接进度，并在超时后明确退出。
+    options.add_argument("--start-maximized")
+    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+    options.add_experimental_option("useAutomationExtension", False)
+
+    def launch():
+        driver = webdriver.Chrome(service=Service(driver_path), options=options)
+        # 必须在打开统一认证页前注入，避免 UAAAP 因 webdriver 标记进入空白异常页。
+        try:
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            })
+        except Exception:
+            pass
+        return driver
+
+    # 同版本 browser + chromedriver 均由本项目准备；连接过程带心跳与 45 秒上限。
     return start_driver_with_watchdog(
-        lambda: webdriver.Chrome(service=Service(driver_path), options=options),
-        "Selenium（项目 Chrome for Testing）",
+        launch,
+        "Selenium（Windows Chrome）",
         timeout=45,
     )
 
@@ -1355,17 +1372,12 @@ def main():
         if major and not driver_path:
             raise RuntimeError("chromedriver 下载或解压失败，已停止以避免后台无提示下载。请检查上方下载日志后重试。")
 
-        if IS_WIN and not portable_version:
-            log("Windows 使用已安装 Chrome 的自动化路径 ...", "INFO")
-        if IS_WIN and portable_version:
-            driver = start_portable_windows_chrome(browser_path, driver_path)
+        if IS_WIN:
+            source = "项目 Chrome for Testing" if portable_version else "已安装 Chrome"
+            log(f"Windows 使用 Selenium 接管{source} ...", "INFO")
+            driver = start_windows_chrome(browser_path, driver_path)
         else:
             options = uc.ChromeOptions()
-            # 国内镜像目前提供的 undetected-chromedriver 3.1.6 会直接读取
-            # options.headless；而新版 Selenium 的 ChromeOptions 已不再预置该属性。
-            # 显式设为 False 后，两者可以正常协作，且仍以可见浏览器运行。
-            if not hasattr(options, "headless"):
-                options.headless = False
             options.add_argument("--disable-popup-blocking")
             options.add_argument("--no-first-run")
             options.add_argument("--no-default-browser-check")
@@ -1376,13 +1388,7 @@ def main():
                 kw["version_main"] = major
             if driver_path:
                 kw["driver_executable_path"] = driver_path
-            # 保持旧版已验证行为：UC 必须在主线程创建，不能放入启动看门狗线程。
-            if IS_WIN:
-                log("正在启动并接管 Chrome ...", "INFO")
-                driver = uc.Chrome(options=options, **kw)
-                log("Chrome 已由自动化驱动接管", "SUCCESS")
-            else:
-                driver = start_chrome_with_watchdog(options, kw)
+            driver = start_chrome_with_watchdog(options, kw)
         # Windows 的统一认证中间页可能白屏，限制为 30 秒；macOS/Linux 保持原有 45 秒。
         driver.set_page_load_timeout(30 if IS_WIN else 45)
         driver.set_script_timeout(30)

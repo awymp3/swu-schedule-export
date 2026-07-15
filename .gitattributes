@@ -1,0 +1,2 @@
+# cmd.exe 子程序标签在部分 Windows 环境对 Unix 行尾兼容不稳定；保持批处理原始 CRLF。
+*.bat -text

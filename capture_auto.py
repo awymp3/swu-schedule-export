@@ -77,7 +77,7 @@ CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
 # 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
 CFT_FALLBACK_VERSION = "152.0.7951.0"
 # 每次启动都会打印，用来确认没有误运行旧下载包中的脚本。
-BUILD_TAG = "2026.07.15-browser-10"
+BUILD_TAG = "2026.07.15-browser-11"
 
 # 强制直连：不读取、不探测、也不使用系统或本地代理。
 # 教务系统、镜像下载和 chromedriver 本地通信均直接连接。

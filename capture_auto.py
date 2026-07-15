@@ -1165,14 +1165,16 @@ def main():
 
     driver = None
     try:
-        # 3) 检测完整 Chrome。Windows 没有安装 Chrome 时下载完整便携版，
-        #    并把路径显式交给 uc，避免其自行寻找/下载无头浏览器失败。
-        browser_path = find_chrome_executable()
+        # 3) Windows 固定使用项目目录的完整 Chrome for Testing；其他系统优先系统 Chrome。
+        #    路径显式交给 uc，避免其自行寻找/下载无头浏览器失败。
         portable_version = None
-        if not browser_path and IS_WIN:
+        if IS_WIN:
+            # Windows 始终使用项目下载的 Chrome for Testing，绝不接管用户日常浏览器。
             browser_path, portable_version = download_portable_chrome()
             if not browser_path:
-                raise RuntimeError("未检测到 Chrome，且完整 Chrome for Testing 下载失败。请检查网络后重试。")
+                raise RuntimeError("项目专用 Chrome for Testing 下载失败。请检查网络后重试。")
+        else:
+            browser_path = find_chrome_executable()
         major = detect_chrome_version(browser_path)
         if not major and portable_version:
             major = int(portable_version.split(".")[0])

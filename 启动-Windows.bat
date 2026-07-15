@@ -95,7 +95,12 @@ set "PYTHON_DIR=%RUNTIME_DIR%\python"
 set "LOCAL_PY=%PYTHON_DIR%\python.exe"
 if exist "%LOCAL_PY%" (
   "%LOCAL_PY%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
-  if not errorlevel 1 exit /b 0
+  if not errorlevel 1 (
+    "%LOCAL_PY%" -m pip --version >nul 2>&1
+    if not errorlevel 1 exit /b 0
+    call :bootstrap_local_pip
+    exit /b %ERRORLEVEL%
+  )
 )
 set "LOCAL_PY="
 
@@ -105,46 +110,70 @@ echo Python 3 was not found. Downloading a local runtime from the Aliyun mirror.
 set "PYTHON_ARCH=amd64"
 if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "PYTHON_ARCH=arm64"
 if /I "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "PYTHON_ARCH=arm64"
-if /I "%PROCESSOR_ARCHITECTURE%"=="x86" set "PYTHON_ARCH=x86"
-set "PYTHON_INSTALLER_NAME=python-%PYTHON_VERSION%-%PYTHON_ARCH%.exe"
-if /I "%PYTHON_ARCH%"=="x86" set "PYTHON_INSTALLER_NAME=python-%PYTHON_VERSION%.exe"
-set "PYTHON_INSTALLER=%RUNTIME_DIR%\%PYTHON_INSTALLER_NAME%"
+if /I "%PROCESSOR_ARCHITECTURE%"=="x86" set "PYTHON_ARCH=win32"
+set "PYTHON_ARCHIVE_NAME=python-%PYTHON_VERSION%-embed-%PYTHON_ARCH%.zip"
+set "PYTHON_ARCHIVE=%RUNTIME_DIR%\%PYTHON_ARCHIVE_NAME%"
 
-call :download_file "%PYTHON_MIRROR%/%PYTHON_INSTALLER_NAME%" "%PYTHON_INSTALLER%"
+call :download_file "%PYTHON_MIRROR%/%PYTHON_ARCHIVE_NAME%" "%PYTHON_ARCHIVE%"
 if errorlevel 1 (
   echo Aliyun mirror failed. Retrying with the official Python source...
-  call :download_file "%PYTHON_OFFICIAL%/%PYTHON_INSTALLER_NAME%" "%PYTHON_INSTALLER%"
+  call :download_file "%PYTHON_OFFICIAL%/%PYTHON_ARCHIVE_NAME%" "%PYTHON_ARCHIVE%"
 )
 if errorlevel 1 exit /b 1
 
-echo Installing the project-local Python runtime...
-REM The Python bootstrapper can spawn a child installer. start /wait prevents
-REM the next line from searching for python.exe before installation is done.
-start "" /wait "%PYTHON_INSTALLER%" /quiet InstallAllUsers=0 TargetDir="%PYTHON_DIR%" PrependPath=0 Include_pip=1 Include_test=0 Include_doc=0 Include_tcltk=0 Include_launcher=0 Shortcuts=0
-set "INSTALL_EXIT=%ERRORLEVEL%"
-if "%INSTALL_EXIT%"=="0" goto :python_installed
-if "%INSTALL_EXIT%"=="3010" goto :python_installed
-echo [ERROR] Python installer exited with code %INSTALL_EXIT%.
-echo Installer kept for diagnosis: %PYTHON_INSTALLER%
-exit /b 1
-
-:python_installed
-
-if not exist "%LOCAL_PY%" (
-  for /f "delims=" %%F in ('dir /b /s "%PYTHON_DIR%\python.exe" 2^>nul') do if not defined LOCAL_PY set "LOCAL_PY=%%F"
+echo Extracting the project-local Python runtime...
+rmdir /s /q "%PYTHON_DIR%" >nul 2>&1
+mkdir "%PYTHON_DIR%" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { Expand-Archive -LiteralPath $env:PYTHON_ARCHIVE -DestinationPath $env:PYTHON_DIR -Force; exit 0 } catch { exit 1 }"
+if errorlevel 1 (
+  echo [ERROR] The Python archive could not be extracted.
+  echo Archive kept for diagnosis: %PYTHON_ARCHIVE%
+  exit /b 1
 )
-if not defined LOCAL_PY (
-  echo [ERROR] Python installer completed, but python.exe was not found under:
+del /q "%PYTHON_ARCHIVE%" >nul 2>&1
+set "LOCAL_PY=%PYTHON_DIR%\python.exe"
+if not exist "%LOCAL_PY%" (
+  echo [ERROR] Python archive extracted, but python.exe was not found under:
   echo         %PYTHON_DIR%
-  echo Installer kept for diagnosis: %PYTHON_INSTALLER%
   exit /b 1
 )
 "%LOCAL_PY%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
 if errorlevel 1 (
-  echo [ERROR] Installed python.exe could not start: %LOCAL_PY%
+  echo [ERROR] Extracted python.exe could not start: %LOCAL_PY%
   exit /b 1
 )
-del /q "%PYTHON_INSTALLER%" >nul 2>&1
+call :bootstrap_local_pip
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:bootstrap_local_pip
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { $pth = Get-ChildItem -LiteralPath $env:PYTHON_DIR -Filter 'python*._pth' | Select-Object -First 1; if (-not $pth) { exit 1 }; $lines = Get-Content -LiteralPath $pth.FullName | ForEach-Object { if ($_ -match '^\s*#\s*import site\s*$') { 'import site' } else { $_ } }; Set-Content -LiteralPath $pth.FullName -Value $lines -Encoding ascii; exit 0 } catch { exit 1 }"
+if errorlevel 1 (
+  echo [ERROR] Could not enable site-packages for the local Python runtime.
+  exit /b 1
+)
+set "GET_PIP=%RUNTIME_DIR%\get-pip.py"
+echo Installing pip for the project-local Python runtime...
+call :download_file "https://bootstrap.pypa.io/get-pip.py" "%GET_PIP%"
+if errorlevel 1 (
+  echo [ERROR] Could not download the pip bootstrap script.
+  exit /b 1
+)
+"%LOCAL_PY%" "%GET_PIP%" --no-warn-script-location --index-url "%PIP_TUNA%"
+if errorlevel 1 (
+  echo Tsinghua mirror failed while installing pip. Retrying with the Aliyun mirror...
+  "%LOCAL_PY%" "%GET_PIP%" --no-warn-script-location --index-url "%PIP_ALIYUN%"
+)
+if errorlevel 1 (
+  echo [ERROR] pip could not be installed for the project-local Python runtime.
+  exit /b 1
+)
+del /q "%GET_PIP%" >nul 2>&1
+"%LOCAL_PY%" -m pip --version >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] pip was installed but cannot be started.
+  exit /b 1
+)
 exit /b 0
 
 :download_file

@@ -8,7 +8,7 @@ cd "$ROOT" || exit 1
 echo "============================================"
 echo "   课程表助手 · 全自动抓取"
 echo "============================================"
-echo "   构建版本：2026.07.15-browser-9"
+echo "   构建版本：2026.07.15-browser-10"
 echo "   Copyright (c) 2026 Jiapeng Lee"
 echo "   GitHub: https://github.com/awymp3/swu-schedule-export"
 echo "   Email: wadrqhh@gmail.com"

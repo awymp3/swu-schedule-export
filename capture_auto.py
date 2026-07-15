@@ -403,20 +403,35 @@ def prompt_account_gui():
     var_remember = tk.BooleanVar(value=True)
     tk.Checkbutton(root, text="记住登录信息（下次免输入）", variable=var_remember).pack(pady=4)
 
+    def close_dialog():
+        """Windows 上显式撤销置顶并销毁窗口，避免确认后遗留前台空窗。"""
+        try:
+            root.attributes("-topmost", False)
+        except Exception:
+            pass
+        try:
+            root.withdraw()
+            root.update_idletasks()
+        except Exception:
+            pass
+        try:
+            root.quit()
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
     def submit():
         u, p = e_user.get().strip(), e_pwd.get().strip()
         if not u or not p:
             messagebox.showwarning("提示", "请填写统一身份认证账号和密码")
             return
         result.update(u=u, p=p, remember=var_remember.get(), ok=True)
-        # 先隐藏窗口，再退出事件循环。某些 Windows Tk 版本在回调内直接
-        # destroy() 后仍会把顶层窗口留在前台一小段时间。
-        root.withdraw()
-        root.quit()
+        close_dialog()
 
     def cancel():
-        root.withdraw()
-        root.quit()
+        close_dialog()
 
     tk.Button(root, text="登录", width=12, command=submit).pack(pady=8)
     e_user.focus_set()
@@ -563,14 +578,24 @@ def get_term_info(driver):
       var options = Array.prototype.map.call((el && el.options) || [], function (o) {
         return {value: o.value, text: (o.textContent || '').trim()};
       }).filter(function (o) { return o.value && o.text; });
-      // 正方会延后填充原生 select。若它尚未可用，退回 Chosen 的选项文本，
-      // 这样用户至少能看到可选择的学年和学期。
-      if (!options.length && chosen) {
-        options = Array.prototype.map.call(
+      // 正方的 Chosen 控件会在下拉框展开后才完整生成 li；它的列表比
+      // 隐藏 select 中的选项更完整时，按 data-option-array-index 读取它。
+      var chosenOptions = [];
+      if (chosen) {
+        chosenOptions = Array.prototype.map.call(
           chosen.querySelectorAll('.chosen-results li[data-option-array-index]'),
-          function (li) { return {value: '', text: (li.textContent || '').trim()}; }
+          function (li) {
+            var index = Number(li.getAttribute('data-option-array-index'));
+            var nativeOption = el && el.options ? el.options[index] : null;
+            return {
+              value: nativeOption ? nativeOption.value : '',
+              text: (li.textContent || '').trim(),
+              index: index
+            };
+          }
         ).filter(function (o) { return o.text && o.text !== '---请选择---'; });
       }
+      if (chosenOptions.length > options.length) options = chosenOptions;
       var selected = el && el.options && el.options[el.selectedIndex];
       var chosenText = chosen && chosen.querySelector('.chosen-spanText');
       return {
@@ -589,11 +614,30 @@ def get_term_info(driver):
     """) or {}
 
 
+def expand_chosen_dropdowns(driver):
+    """让正方的 Chosen 控件生成完整列表，再由 get_term_info 读取。"""
+    driver.execute_script("""
+    ['xnm', 'xqm'].forEach(function (id) {
+      var el = document.getElementById(id) || document.querySelector('select[name="' + id + '"]');
+      var chosen = document.getElementById(id + '_chosen');
+      if (window.jQuery && el) {
+        window.jQuery(el).trigger('chosen:open');
+      } else {
+        var trigger = chosen && chosen.querySelector('.chosen-single');
+        if (trigger) trigger.click();
+      }
+    });
+    """)
+
+
 def wait_for_term_options(driver, timeout=12):
     """等待正方页面异步填充学年/学期下拉框；超时仍返回最后一次读取结果。"""
     deadline = time.time() + timeout
     latest = {}
     while time.time() < deadline:
+        # 截图所示的 li 由 Chosen 在展开时生成，先主动展开再读取。
+        expand_chosen_dropdowns(driver)
+        time.sleep(0.15)
         latest = get_term_info(driver)
         year = latest.get("academicYear") or {}
         term = latest.get("term") or {}
@@ -609,7 +653,7 @@ def option_texts(options):
 
 
 def set_select_by_label(driver, element_id, wanted):
-    """按显示文字（或底层 value）设置下拉框，并同步 Chosen 外观。"""
+    """按显示文字（或底层 value）设置下拉框，必要时直接点击 Chosen 选项。"""
     return driver.execute_script("""
     var id = arguments[0], wanted = String(arguments[1]).trim();
     var el = document.getElementById(id);
@@ -617,11 +661,26 @@ def set_select_by_label(driver, element_id, wanted):
     var option = Array.prototype.find.call(el.options, function (o) {
       return (o.textContent || '').trim() === wanted || o.value === wanted;
     });
-    if (!option) return {ok: false, reason: '不存在该选项'};
-    el.value = option.value;
-    el.dispatchEvent(new Event('change', {bubbles: true}));
-    if (window.jQuery) window.jQuery(el).trigger('chosen:updated');
-    return {ok: true, value: option.value, text: (option.textContent || '').trim()};
+    if (option) {
+      el.value = option.value;
+      el.dispatchEvent(new Event('change', {bubbles: true}));
+      if (window.jQuery) window.jQuery(el).trigger('chosen:updated');
+      return {ok: true, value: option.value, text: (option.textContent || '').trim()};
+    }
+    // 有些正方页面只在 Chosen 视图中保留完整选项；交给控件自身完成同步。
+    var chosen = document.getElementById(id + '_chosen');
+    var item = chosen && Array.prototype.find.call(
+      chosen.querySelectorAll('.chosen-results li.active-result'),
+      function (li) { return (li.textContent || '').trim() === wanted; }
+    );
+    if (!item) return {ok: false, reason: '不存在该选项'};
+    item.click();
+    var selected = el.options && el.options[el.selectedIndex];
+    return {
+      ok: true,
+      value: selected ? selected.value : '',
+      text: selected ? (selected.textContent || '').trim() : wanted
+    };
     """, element_id, wanted)
 
 

@@ -4,6 +4,8 @@
 
 西南大学教务系统使用正方教务。本项目按西南大学当前课表页面的结构编写，不作为其他学校教务系统的通用抓取工具。
 
+本项目为个人维护的开源工具，与西南大学及其教务系统没有隶属、授权或合作关系。
+
 ## 使用前说明
 
 - 抓取课表时，需要连接西南大学校园网，或处于能够正常访问西南大学教务系统的校内网络环境。
@@ -88,5 +90,14 @@ chmod +x 启动-Mac.command
 | `capture.py` | 手动登录后抓取课表的备用脚本 |
 | `index.html` | 课表预览与 `.ics` 导出页面 |
 | `.env` | 本地账号信息，不会提交到 Git |
+| `.env.example` | `.env` 格式示例，不含真实账号 |
 | `.runtime/` | 自动下载的本地 Python 运行时，不会提交到 Git |
 | `captured.js` | 最近一次抓取的课表数据，可删除 |
+| `SECURITY.md` | 账号、数据和安全使用说明 |
+| `THIRD_PARTY_NOTICES.md` | 运行时第三方组件及许可证说明 |
+
+## 开源许可
+
+本项目采用 [MIT License](LICENSE)。运行时下载的 Selenium、undetected-chromedriver、ddddocr、Pillow 和 uv 等组件分别适用各自的许可证，详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+使用前请阅读 [SECURITY.md](SECURITY.md)：不要提交 `.env`、`captured.js` 或其他包含账号、课程数据的本地文件。

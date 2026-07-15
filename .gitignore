@@ -1,0 +1,16 @@
+# 个人敏感数据 —— 切勿分享/提交
+.env
+account.json
+
+# 运行时生成
+captured.js
+drivers/
+.runtime/
+_captcha_debug.png
+__pycache__/
+*.pyc
+.DS_Store
+
+# 你原有的成绩监控脚本（含明文账号密码），勿外传
+latest.py
+grades_detail_history.json

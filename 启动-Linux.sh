@@ -1,0 +1,32 @@
+#!/bin/bash
+# Linux 启动：全自动登录 + 抓取课程表
+# 运行：bash 启动-Linux.sh   （或 chmod +x 后 ./启动-Linux.sh）
+cd "$(dirname "$0")" || exit 1
+
+echo "============================================"
+echo "   📅 课程表助手 · 全自动抓取"
+echo "============================================"
+echo
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "❌ 未找到 python3，请先安装：sudo apt install python3 python3-pip python3-tk"
+  read -n 1 -s -r -p "按任意键退出…"; exit 1
+fi
+
+echo "🔍 检查依赖..."
+NEED=""
+python3 -c "import undetected_chromedriver" 2>/dev/null || NEED="$NEED undetected-chromedriver"
+python3 -c "import ddddocr" 2>/dev/null || NEED="$NEED ddddocr"
+python3 -c "import selenium" 2>/dev/null || NEED="$NEED selenium"
+python3 -c "import PIL" 2>/dev/null || NEED="$NEED pillow"
+if [ -n "$NEED" ]; then
+  echo "📦 首次使用，正在安装依赖（清华镜像）：$NEED"
+  pip3 install $NEED -i https://pypi.tuna.tsinghua.edu.cn/simple
+fi
+# 图形输入窗口需要 tkinter
+python3 -c "import tkinter" 2>/dev/null || echo "⚠️ 未装 tkinter，账号将用终端输入。如需弹窗：sudo apt install python3-tk"
+
+python3 capture_auto.py
+
+echo
+read -n 1 -s -r -p "按任意键关闭…"

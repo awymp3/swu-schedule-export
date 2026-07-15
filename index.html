@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>西南大学课程表 · 导出日历</title>
+<style>
+  :root{
+    --bg:#0f1221; --panel:#181c2f; --panel2:#1f2440; --line:#2b3158;
+    --text:#e8ebff; --muted:#9aa3c7; --accent:#6c7bff; --accent2:#37d3a0;
+    --danger:#ff6b81; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    background:linear-gradient(160deg,#0f1221,#141832 60%,#0f1221); color:var(--text);
+    min-height:100vh; padding:24px;
+  }
+  h1{font-size:22px; margin:0 0 4px}
+  .sub{color:var(--muted); font-size:13px; margin-bottom:20px}
+  .wrap{max-width:1180px; margin:0 auto}
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:18px; margin-bottom:18px;
+  }
+  .card h2{font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px}
+  .badge{background:var(--accent); color:#fff; font-size:11px; padding:2px 8px; border-radius:20px}
+  .row{display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end}
+  .field{display:flex; flex-direction:column; gap:6px}
+  label{font-size:12px; color:var(--muted)}
+  input,textarea,select{
+    background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:10px; padding:10px 12px; font-size:14px; outline:none; font-family:inherit;
+  }
+  input:focus,textarea:focus{border-color:var(--accent)}
+  textarea{width:100%; min-height:120px; resize:vertical; font-family:ui-monospace,Menlo,monospace; font-size:12px; line-height:1.5}
+  button{
+    background:var(--accent); color:#fff; border:none; border-radius:10px;
+    padding:11px 18px; font-size:14px; font-weight:600; cursor:pointer; transition:.15s;
+  }
+  button:hover{filter:brightness(1.1)}
+  button.ghost{background:transparent; border:1px solid var(--line); color:var(--text)}
+  button.green{background:var(--accent2)}
+  button:disabled{opacity:.45; cursor:not-allowed}
+  .hint{font-size:12px; color:var(--muted); line-height:1.6}
+  .hint b{color:var(--text)}
+  .steps{counter-reset:s; list-style:none; padding:0; margin:8px 0 0}
+  .steps li{counter-increment:s; padding:4px 0 4px 26px; position:relative; font-size:13px; color:var(--muted)}
+  .steps li::before{content:counter(s); position:absolute; left:0; top:4px; width:18px; height:18px;
+    background:var(--accent); color:#fff; border-radius:50%; font-size:11px; display:flex; align-items:center; justify-content:center}
+  /* times table */
+  table.times{border-collapse:collapse; width:100%; font-size:13px}
+  table.times th,table.times td{border:1px solid var(--line); padding:6px 8px; text-align:center}
+  table.times input{padding:5px 6px; width:84px; text-align:center; font-size:13px}
+  table.times th{color:var(--muted); font-weight:500; background:var(--panel2)}
+  /* schedule grid */
+  .grid-wrap{overflow-x:auto}
+  table.grid{border-collapse:separate; border-spacing:4px; width:100%; min-width:760px}
+  table.grid th{font-size:13px; color:var(--muted); font-weight:600; padding:8px 4px}
+  table.grid th .dt{display:block; font-size:11px; color:var(--accent); font-weight:400}
+  table.grid td.time{font-size:11px; color:var(--muted); white-space:nowrap; padding:4px 8px; text-align:right; vertical-align:top}
+  table.grid td.slot{vertical-align:top; background:var(--panel2); border-radius:10px; min-width:96px; height:64px; padding:0}
+  .course{border-radius:10px; padding:7px 8px; height:100%; font-size:12px; line-height:1.35; cursor:default; overflow:hidden}
+  .course .nm{font-weight:700; margin-bottom:3px}
+  .course .meta{opacity:.92; font-size:11px}
+  .toolbar{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px}
+  .stat{font-size:13px; color:var(--muted)}
+  .stat b{color:var(--accent2)}
+  .empty{color:var(--muted); text-align:center; padding:40px; font-size:14px}
+  details{margin-top:10px}
+  summary{cursor:pointer; color:var(--accent); font-size:13px}
+  .pill{display:inline-block; background:var(--panel2); border:1px solid var(--line); border-radius:20px; padding:2px 10px; font-size:11px; margin:2px 4px 2px 0}
+  .warn{color:var(--danger)}
+  .ok{color:var(--accent2)}
+  a{color:var(--accent)}
+  .autobanner{background:linear-gradient(90deg,#1d2440,#243a30);border:1px solid var(--accent2);
+    border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;display:none}
+  .autobanner.show{display:block}
+  .autobanner b{color:var(--accent2)}
+  .term-info{display:none; align-items:center; gap:9px; flex-wrap:wrap; margin:-2px 0 14px; font-size:13px}
+  .term-info.show{display:flex}
+  .term-info .term-label{color:var(--muted)}
+  .term-info .term-value{background:var(--panel2); border:1px solid var(--line); border-radius:20px; padding:4px 10px; color:var(--accent2); font-weight:600}
+  .course .note{margin-top:3px; opacity:.78; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📅 西南大学课程表</h1>
+  <div class="sub">导入西南大学教务课表，预览后导出日历（.ics）。数据全程在本机处理，不上传任何服务器。</div>
+
+  <div class="autobanner" id="autoBanner"></div>
+
+  <!-- STEP 1: paste -->
+  <div class="card">
+    <h2><span class="badge">1</span> 课表数据来源</h2>
+    <div class="hint" style="margin-bottom:10px">
+      推荐使用配套启动脚本自动抓取。若使用 <b>capture.py</b>，请在弹出的 Chrome 中登录西南大学教务系统并打开课表页，再回到终端按回车；本页会自动载入课表。
+    </div>
+    <details id="manualBox">
+      <summary>没有用脚本？点这里手动粘贴课表源码</summary>
+      <div style="margin-top:10px">
+        <ol class="steps">
+          <li>在浏览器登录西南大学教务系统，打开「个人课表查询」页面</li>
+          <li>对整页 <b>Ctrl/Cmd+A 全选 → 复制</b>，或右键查看源代码复制</li>
+          <li>粘贴到下方，点「解析课表」</li>
+        </ol>
+        <textarea id="htmlInput" placeholder="在此粘贴课表 HTML 源码……（推荐整页，包含学年/学期和 timetable_con 课程块）"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button onclick="parseSchedule()">🔍 解析课表</button>
+          <button class="ghost" onclick="loadDemo()">载入示例数据</button>
+          <span id="parseMsg" class="hint"></span>
+        </div>
+      </div>
+    </details>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" onclick="loadDemo()">载入示例数据预览效果</button>
+      <span id="parseMsg2" class="hint"></span>
+    </div>
+  </div>
+
+  <!-- STEP 2: settings -->
+  <div class="card">
+    <h2><span class="badge">2</span> 学期与作息设置</h2>
+    <div id="termInfo" class="term-info"></div>
+    <div class="row" style="margin-bottom:14px">
+      <div class="field">
+        <label>第一周 周一的日期</label>
+        <input type="date" id="firstMonday" />
+      </div>
+      <div class="field">
+        <label>每天总节数</label>
+        <input type="number" id="periodCount" value="14" min="1" max="20" style="width:90px"
+               onchange="setPeriodCount(this.value)"/>
+      </div>
+      <div class="field">
+        <label>每节课时长（分钟）· 批量填充用</label>
+        <input type="number" id="durMin" value="45" min="20" max="120" style="width:120px"/>
+      </div>
+      <div class="field">
+        <button class="ghost" onclick="autoFillTimes()">⏱ 按起始时间顺延填充</button>
+      </div>
+    </div>
+    <div class="hint" style="margin-bottom:8px">不同学校节数不同：先设好<b>每天总节数</b>，再核对各节<b>上/下课时间</b>（可直接编辑）。默认是西南大学 14 节作息。导出日历会用到这里。</div>
+    <div style="overflow-x:auto">
+      <table class="times" id="timesTable"></table>
+    </div>
+  </div>
+
+  <!-- STEP 3: result -->
+  <div class="card">
+    <h2><span class="badge">3</span> 可视化课表 & 导出</h2>
+    <div class="toolbar">
+      <button class="green" id="exportBtn" onclick="exportICS()" disabled>📥 导出 .ics 日历</button>
+      <select id="weekFilter" onchange="renderGrid()"></select>
+      <span class="stat" id="stat"></span>
+    </div>
+    <div id="gridArea"><div class="empty">解析课表后，这里会显示可视化课程表。</div></div>
+    <details>
+      <summary>导出说明 / 如何导入手机日历？</summary>
+      <div class="hint" style="margin-top:8px">
+        导出的 <b>.ics</b> 是日历通用格式：<br>
+        • <b>iPhone / Mac</b>：把文件发给自己（隔空投送/微信文件传输），点开 → 添加到「日历」<br>
+        • <b>Google 日历</b>：电脑端 calendar.google.com → 设置 → 导入与导出 → 导入该文件<br>
+        • <b>Outlook</b>：日历 → 添加日历 → 从文件导入<br>
+        每节课会按所在周次生成对应日期的日程（含单双周），不会生成你没课的周。
+      </div>
+    </details>
+  </div>
+
+  <div class="sub" style="text-align:center; margin-top:24px">
+    本地课表预览与日历导出 · <span id="ver"></span>
+  </div>
+</div>
+
+<!-- 由 capture.py 生成的抓取结果；文件不存在时此行无副作用 -->
+<script src="captured.js" onerror="void 0"></script>
+<script>
+/* ============================================================
+   课程表助手  —  正方教务 课表解析 + ICS 导出
+   全部逻辑在浏览器本地运行
+   ============================================================ */
+
+const WEEK_NAMES = ['周一','周二','周三','周四','周五','周六','周日'];
+let COURSES = [];          // 解析出的课程
+let MAX_PERIOD = 14;       // 最大节次（可由用户调整）
+let SCHEDULE_META = {};    // 当前抓取课表所属的学年 / 学期
+
+/* ---------- 默认作息时间（西南大学 14 节，可编辑） ---------- */
+const DEFAULT_TIMES = [
+  ['08:00','08:45'],['08:55','09:40'],['10:00','10:45'],['10:55','11:40'],
+  ['12:10','12:55'],['13:05','13:50'],['14:00','14:45'],['14:55','15:40'],
+  ['15:50','16:35'],['16:55','17:40'],['17:50','18:35'],['19:20','20:05'],
+  ['20:15','21:00'],['21:10','21:55'],
+];
+let PERIOD_COUNT = DEFAULT_TIMES.length;  // 当前节数
+
+/* ---------- 初始化 ---------- */
+function initTimesTable(){
+  const t = document.getElementById('timesTable');
+  const n = PERIOD_COUNT;
+  const half = Math.ceil(n/2);
+  let html = '<tr><th>节次</th><th>上课</th><th>下课</th>'+
+             '<th>节次</th><th>上课</th><th>下课</th></tr>';
+  // 两列布局，左列 1..half，右列 half+1..n
+  for(let i=0;i<half;i++){
+    const a=i, b=i+half;
+    html += '<tr>'+ cell(a) + (b<n? cell(b) : '<td></td><td></td><td></td>') + '</tr>';
+  }
+  t.innerHTML = html;
+}
+function cell(i){
+  const [s,e] = DEFAULT_TIMES[i] || ['',''];
+  return `<td>第${i+1}节</td>`+
+         `<td><input id="t_s_${i}" value="${s}" placeholder="08:00"></td>`+
+         `<td><input id="t_e_${i}" value="${e}" placeholder="08:45"></td>`;
+}
+function getTime(period, which){ // period:1-based
+  const el = document.getElementById(`t_${which}_${period-1}`);
+  return el ? el.value.trim() : '';
+}
+function setPeriodCount(n){
+  n = Math.max(1, Math.min(20, parseInt(n)||PERIOD_COUNT));
+  // 保留用户已填的时间
+  const saved = [];
+  for(let i=0;i<PERIOD_COUNT;i++) saved[i]=[getTime(i+1,'s'),getTime(i+1,'e')];
+  PERIOD_COUNT = n;
+  MAX_PERIOD = Math.max(MAX_PERIOD, n);
+  initTimesTable();
+  // 回填
+  for(let i=0;i<n;i++){
+    if(saved[i]){
+      const se=document.getElementById('t_s_'+i), ee=document.getElementById('t_e_'+i);
+      if(se && saved[i][0]) se.value=saved[i][0];
+      if(ee && saved[i][1]) ee.value=saved[i][1];
+    }
+  }
+  if(COURSES.length) renderGrid();
+}
+function autoFillTimes(){
+  const dur = parseInt(document.getElementById('durMin').value)||45;
+  for(let i=0;i<PERIOD_COUNT;i++){
+    const s = document.getElementById('t_s_'+i).value.trim();
+    if(s && /^\d{1,2}:\d{2}$/.test(s)){
+      document.getElementById('t_e_'+i).value = addMinutes(s,dur);
+    }
+  }
+}
+function addMinutes(hhmm, mins){
+  let [h,m] = hhmm.split(':').map(Number);
+  let total = h*60+m+mins;
+  total = ((total%1440)+1440)%1440;
+  return String(Math.floor(total/60)).padStart(2,'0')+':'+String(total%60).padStart(2,'0');
+}
+
+/* ============================================================
+   解析正方课表 HTML
+   ============================================================ */
+function setMsg(html){
+  const a=document.getElementById('parseMsg'), b=document.getElementById('parseMsg2');
+  if(a) a.innerHTML=html; if(b) b.innerHTML=html;
+}
+function parseSchedule(rawArg, metaArg){
+  const raw = (typeof rawArg==='string' && rawArg) ? rawArg
+              : (document.getElementById('htmlInput')||{}).value || '';
+  if(!raw.trim()){ setMsg('<span class="warn">请先粘贴课表源码</span>'); return; }
+
+  const doc = new DOMParser().parseFromString(raw,'text/html');
+  // 正方新版的表格视图：td 的 id 为「星期-起始节次」，每个课程的节/周、地点等
+  // 由 title 属性标注。这一分支优先于旧版列表视图，避免错配课程、地点和节次。
+  let found = parseGridTable(doc);
+  if(found.length===0){
+    const blocks = doc.querySelectorAll('.timetable_con');
+    blocks.forEach(div=>{ const info=extractCourse(div); if(info) found.push(info); });
+  }
+  if(found.length===0) found = parseByJcCells(doc);
+
+  if(found.length===0){
+    setMsg('<span class="warn">没识别到课程。请确认抓取/粘贴了包含课程表格或 jc_ 的课表区域。</span>');
+    return;
+  }
+
+  COURSES = found;
+  SCHEDULE_META = resolveScheduleMeta(doc, metaArg);
+  const maxCourseP = Math.max(...found.map(c=>c.periodEnd));
+  MAX_PERIOD = Math.max(PERIOD_COUNT, maxCourseP);
+  // 课程节次超过当前作息设置时，自动扩展节数。
+  if(maxCourseP > PERIOD_COUNT){
+    const inp=document.getElementById('periodCount');
+    if(inp){ inp.value=maxCourseP; setPeriodCount(maxCourseP); }
+  }
+  // 表格视图本身含有每节的起止时间；存在时自动带入，仍可在页面中手动编辑。
+  applyPeriodTimes(extractPeriodTimes(doc));
+  updateTermInfo();
+  const term = scheduleLabel();
+  setMsg(`<span class="ok">✓ 成功解析 ${found.length} 门课程安排${term ? ' · '+esc(term) : ''}</span>`);
+  buildWeekFilter();
+  renderGrid();
+  document.getElementById('exportBtn').disabled = false;
+}
+
+/* 截图所示的新版正方表格：td id 为 "星期-起始节次"，例如 1-1。 */
+function parseGridTable(doc){
+  const out=[];
+  doc.querySelectorAll('.timetable_con').forEach(div=>{
+    const td = div.closest('td');
+    const m = td && (td.id||'').match(/^([1-7])-(\d+)$/);
+    if(!m) return;
+    const info = extractGridCourse(div, td, +m[1], +m[2]);
+    if(info) out.push(info);
+  });
+  return out;
+}
+
+function extractGridCourse(div, td, weekday, fallbackStart){
+  const details = titledDetails(div);
+  const periodText = fieldValue(details, '节/周');
+  const period = parsePeriodRange(periodText);
+  const pStart = period ? period.start : fallbackStart;
+  const pEnd = period ? period.end : fallbackStart + Math.max(1, +(td.getAttribute('rowspan')||1)) - 1;
+  const full = clean(div.textContent);
+  const weeksRaw = weeksFromPeriodText(periodText) || legacyWeeksText(full);
+  return makeCourse({
+    div, weekday, periodStart:pStart, periodEnd:pEnd, weeksRaw,
+    details,
+    place: fieldValue(details, '上课地点') || legacyPlace(full),
+    teacher: fieldValue(details, '教师') || legacyTeacher(full)
+  });
+}
+
+/* 后备解析：遍历旧版 td[id^=jc_]。 */
+function parseByJcCells(doc){
+  const out=[];
+  doc.querySelectorAll('td[id^="jc_"]').forEach(td=>{
+    const m=(td.id||'').match(/jc_(\d+)-(\d+)-(\d+)/); if(!m) return;
+    const divs=td.querySelectorAll('.timetable_con');
+    if(divs.length){
+      divs.forEach(div=>{ const info=extractCourse(div); if(info) out.push(info); });
+      return;
+    }
+    const full=clean(td.textContent);
+    const nameEl=td.querySelector('.title, a, font');
+    if(!nameEl) return;
+    out.push(makeCourse({
+      name:clean(nameEl.textContent), weekday:+m[1], periodStart:+m[2], periodEnd:+m[3],
+      weeksRaw:legacyWeeksText(full), place:legacyPlace(full), teacher:legacyTeacher(full), details:{}
+    }));
+  });
+  return out.filter(Boolean);
+}
+
+function extractCourse(div){
+  // 找到 jc_ 单元格以获取星期与节次；新版 "1-1" 格式由 parseGridTable 处理。
+  let td = div.closest('td');
+  let jcTd = (td && /^jc_/.test(td.id||'')) ? td : null;
+  if(!jcTd && td && td.parentElement) jcTd = td.parentElement.querySelector('td[id^="jc_"]');
+  if(!jcTd){ const tr=div.closest('tr'); if(tr) jcTd=tr.querySelector('td[id^="jc_"]'); }
+
+  let weekday=null, pStart=null, pEnd=null;
+  if(jcTd){
+    const m=(jcTd.id||'').match(/jc_(\d+)-(\d+)-(\d+)/);
+    if(m){ weekday=+m[1]; pStart=+m[2]; pEnd=+m[3]; }
+  }
+  const fes=(jcTd && jcTd.querySelector('.festival')) || div.querySelector('.festival');
+  if(fes){
+    const fm=fes.textContent.match(/(\d+)\s*-\s*(\d+)/);
+    if(fm){ pStart=pStart||+fm[1]; pEnd=pEnd||+fm[2]; }
+    else { const single=fes.textContent.match(/(\d+)/); if(single && !pStart) pStart=pEnd=+single[1]; }
+  }
+  if(!weekday || !pStart) return null;
+
+  const details=titledDetails(div);
+  const full=clean(div.textContent);
+  const periodText=fieldValue(details, '节/周');
+  const period=parsePeriodRange(periodText);
+  if(period){ pStart=period.start; pEnd=period.end; }
+  return makeCourse({
+    div, weekday, periodStart:pStart, periodEnd:pEnd,
+    weeksRaw:weeksFromPeriodText(periodText) || legacyWeeksText(full), details,
+    place:fieldValue(details, '上课地点') || legacyPlace(full),
+    teacher:fieldValue(details, '教师') || legacyTeacher(full)
+  });
+}
+
+function makeCourse(data){
+  const titleEl=data.div && data.div.querySelector('.title');
+  const rawName=clean(data.name || (titleEl ? titleEl.textContent : '') ||
+    (data.div ? data.div.textContent.slice(0,30) : ''));
+  if(!rawName || !data.weekday || !data.periodStart || !data.periodEnd) return null;
+  const markers=(rawName.match(/[◇◆△▲★☆*※]+/g)||[]).join('');
+  const details=data.details||{};
+  const weeksRaw=clean(data.weeksRaw||'');
+  return {
+    name:rawName.replace(/[◇◆△▲★☆*※]+/g,'').replace(/^【[^】]*】/,'').trim(),
+    marker:markers,
+    weekday:+data.weekday, periodStart:+data.periodStart, periodEnd:+data.periodEnd,
+    weeks:parseWeeks(weeksRaw), weeksRaw,
+    place:clean(data.place||''), teacher:clean(data.teacher||fieldValue(details,'教师')),
+    teachingClass:fieldValue(details,'教学班名称','教学班'),
+    classComposition:fieldValue(details,'教学班组成'),
+    assessment:fieldValue(details,'考核方式'),
+    remark:fieldValue(details,'选课备注'),
+    hours:fieldValue(details,'课程学时组成'),
+    weeklyHours:fieldValue(details,'周学时'),
+    totalHours:fieldValue(details,'总学时'),
+    credits:fieldValue(details,'学分')
+  };
+}
+
+/* 课程块内 title="上课地点" 这类标记是新版正方最可靠的字段边界。 */
+function titledDetails(div){
+  const fields={};
+  div.querySelectorAll('[title]').forEach(labelEl=>{
+    const label=normalizeLabel(labelEl.getAttribute('title'));
+    if(!label) return;
+    const line=labelEl.closest('p') || labelEl.parentElement;
+    let value=clean(line ? line.textContent : '');
+    const labelText=clean(labelEl.textContent);
+    if(labelText && value.startsWith(labelText)) value=clean(value.slice(labelText.length));
+    if(!(label in fields) || !fields[label]) fields[label]=value;
+  });
+  return fields;
+}
+function normalizeLabel(s){ return clean(s).replace(/[：:\s]/g,''); }
+function fieldValue(fields, ...labels){
+  for(const label of labels){
+    const value=fields[normalizeLabel(label)];
+    if(value) return clean(value);
+  }
+  return '';
+}
+function parsePeriodRange(text){
+  const m=clean(text).match(/第?\s*(\d+)\s*(?:-\s*(\d+))?\s*节/);
+  return m ? {start:+m[1], end:+(m[2]||m[1])} : null;
+}
+function weeksFromPeriodText(text){
+  return clean((text||'').replace(/^\s*[（(]?\s*第?\s*\d+\s*(?:-\s*\d+)?\s*节\s*[）)]?\s*/,''));
+}
+function legacyWeeksText(text){
+  return pick(text,/周数[：:]\s*([^校教上考教学]*?周[^校教上考教学]*?)(?=校区|教师|上课|考核|教学|$)/) ||
+         pick(text,/周数[：:]\s*([0-9,\-，\s单双()（）周]+)/) || '';
+}
+function legacyPlace(text){
+  return pick(text,/上课地点[：:]\s*([^教考校]*?)(?=\s*(教师|考核|校区|教学|选课|课程|周学时|总学时|学分|$))/) ||
+         pick(text,/地点[：:]\s*([^\s<]+)/);
+}
+function legacyTeacher(text){
+  return pick(text,/教师\s*[：:]\s*([^校上教考]*?)(?=\s*(教学|教师|校区|上课|考核|选课|课程|周学时|总学时|学分|$))/) ||
+         pick(text,/教师\s*[：:]\s*([^\s<]+)/);
+}
+
+function extractPeriodTimes(doc){
+  const times={};
+  doc.querySelectorAll('span.festival').forEach(festival=>{
+    const td=festival.closest('td'); if(!td) return;
+    const clock=[...td.querySelectorAll('span')].map(el=>clean(el.textContent))
+      .filter(text=>/^\d{1,2}:\d{2}$/.test(text));
+    if(clock.length<2) return;
+    const range=festival.textContent.match(/(\d+)\s*(?:-\s*(\d+))?/); if(!range) return;
+    const start=+range[1], end=+(range[2]||range[1]);
+    if(!times[start]) times[start]={};
+    if(!times[end]) times[end]={};
+    times[start].start=clock[0]; times[end].end=clock[clock.length-1];
+  });
+  return times;
+}
+function applyPeriodTimes(times){
+  const periods=Object.keys(times).map(Number).filter(Number.isFinite);
+  if(!periods.length) return;
+  const max=Math.max(...periods);
+  if(max>PERIOD_COUNT){
+    const inp=document.getElementById('periodCount');
+    if(inp){ inp.value=max; setPeriodCount(max); }
+  }
+  periods.forEach(period=>{
+    const value=times[period];
+    const start=document.getElementById(`t_s_${period-1}`);
+    const end=document.getElementById(`t_e_${period-1}`);
+    if(start && value.start) start.value=value.start;
+    if(end && value.end) end.value=value.end;
+  });
+}
+
+function resolveScheduleMeta(doc, supplied){
+  const title=clean(doc.querySelector('.timetable_title')?.textContent || supplied?.timetableTitle || '');
+  const titleMatch=title.match(/(\d{4}\s*-\s*\d{4})\s*学年\s*(?:第\s*)?(\d+)\s*学期/);
+  const selectText=id=>{
+    const select=doc.getElementById(id);
+    const option=select && select.options && select.options[select.selectedIndex];
+    const chosen=doc.querySelector(`#${id}_chosen .chosen-spanText`);
+    return clean(option?.textContent || chosen?.textContent || '');
+  };
+  const academicYear=titleMatch?.[1] || clean(supplied?.academicYear?.text || selectText('xnm'));
+  const term=titleMatch?.[2] || clean(supplied?.term?.text || selectText('xqm'));
+  return {academicYear, term, timetableTitle:title};
+}
+function scheduleLabel(){
+  const year=SCHEDULE_META.academicYear, term=SCHEDULE_META.term;
+  if(year && term) return `${year} 学年 · 第 ${term} 学期`;
+  return year || (term ? `第 ${term} 学期` : '');
+}
+function updateTermInfo(){
+  const el=document.getElementById('termInfo'); if(!el) return;
+  const label=scheduleLabel();
+  el.classList.toggle('show', !!label);
+  el.replaceChildren();
+  if(label){
+    const prefix=document.createElement('span'); prefix.className='term-label'; prefix.textContent='已读取课表：';
+    const value=document.createElement('span'); value.className='term-value'; value.textContent=label;
+    el.append(prefix,value);
+  }
+}
+
+function clean(s){ return (s||'').replace(/\s+/g,' ').trim(); }
+function pick(text, re){ const m=(text||'').match(re); return m? clean(m[1]) : ''; }
+
+/* 解析周次："1-7周" "1-16周(单)" "1,3,5-9周" "1-4,7-9周(双)" */
+function parseWeeks(txt){
+  const set = new Set();
+  if(!txt) return [];
+  const oddOnly = /单/.test(txt);
+  const evenOnly = /双/.test(txt);
+  // 取出所有数字范围
+  const body = txt.replace(/[周\s（）()单双]/g,' ');
+  body.split(/[,，]/).forEach(seg=>{
+    seg = seg.trim(); if(!seg) return;
+    const r = seg.match(/(\d+)\s*-\s*(\d+)/);
+    if(r){ for(let w=+r[1]; w<=+r[2]; w++) consider(w); }
+    else { const n=seg.match(/\d+/); if(n) consider(+n[0]); }
+  });
+  function consider(w){
+    if(oddOnly && w%2===0) return;
+    if(evenOnly && w%2===1) return;
+    set.add(w);
+  }
+  return [...set].sort((a,b)=>a-b);
+}
+
+/* ============================================================
+   可视化渲染
+   ============================================================ */
+function buildWeekFilter(){
+  const sel = document.getElementById('weekFilter');
+  const allWeeks = new Set();
+  COURSES.forEach(c=>c.weeks.forEach(w=>allWeeks.add(w)));
+  const weeks = [...allWeeks].sort((a,b)=>a-b);
+  let html = '<option value="all">显示全部周次</option>';
+  weeks.forEach(w=>{ html += `<option value="${w}">第 ${w} 周</option>`; });
+  sel.innerHTML = html;
+}
+
+function mondayDate(){
+  const v = document.getElementById('firstMonday').value;
+  if(!v) return null;
+  const d = new Date(v+'T00:00:00');
+  return isNaN(d)? null : d;
+}
+function dateOf(weekNum, weekday){ // weekday 1-7
+  const base = mondayDate(); if(!base) return null;
+  const d = new Date(base);
+  d.setDate(d.getDate() + (weekNum-1)*7 + (weekday-1));
+  return d;
+}
+function fmtDate(d){ return `${d.getMonth()+1}/${d.getDate()}`; }
+
+const PALETTE = ['#6c7bff','#37d3a0','#ff8a5b','#ff6b9d','#ffd166','#4cc9f0','#b388ff','#06d6a0','#f78c6b','#9b5de5'];
+function colorOf(name){
+  let h=0; for(const ch of name) h=(h*31+ch.charCodeAt(0))>>>0;
+  return PALETTE[h%PALETTE.length];
+}
+
+function renderGrid(){
+  const area = document.getElementById('gridArea');
+  if(COURSES.length===0){ area.innerHTML='<div class="empty">解析课表后，这里会显示可视化课程表。</div>'; return; }
+
+  const filter = document.getElementById('weekFilter').value;
+  const weekNum = filter==='all'? null : +filter;
+  const base = mondayDate();
+
+  // 用到的最大星期
+  let maxDay = 5;
+  COURSES.forEach(c=>{ if(c.weekday>maxDay) maxDay=c.weekday; });
+
+  // 建立 [period][weekday] -> course，处理 rowspan
+  const cellMap = {}; // key period_weekday
+  const span = {};    // 标记被合并跳过的格子
+  COURSES.forEach(c=>{
+    if(weekNum && !c.weeks.includes(weekNum)) return;
+    const key = c.periodStart+'_'+c.weekday;
+    cellMap[key] = c;
+    for(let p=c.periodStart+1; p<=c.periodEnd; p++) span[p+'_'+c.weekday]=true;
+  });
+
+  let html = '<div class="grid-wrap"><table class="grid"><tr><th></th>';
+  for(let d=1; d<=maxDay; d++){
+    let dt='';
+    if(base && weekNum){ const dd=dateOf(weekNum,d); if(dd) dt=`<span class="dt">${fmtDate(dd)}</span>`; }
+    html += `<th>${WEEK_NAMES[d-1]}${dt}</th>`;
+  }
+  html += '</tr>';
+
+  for(let p=1; p<=MAX_PERIOD; p++){
+    const s=getTime(p,'s'), e=getTime(p,'e');
+    html += `<tr><td class="time">第${p}节<br>${s||''}${s?'–':''}${e||''}</td>`;
+    for(let d=1; d<=maxDay; d++){
+      const key=p+'_'+d;
+      if(span[key]) continue; // 被上面的 rowspan 占用
+      const c = cellMap[key];
+      if(c){
+        const rs = c.periodEnd-c.periodStart+1;
+        const col = colorOf(c.name);
+        const meta = [c.place, c.teacher].filter(Boolean).join(' · ');
+        const note = c.remark ? `<div class="note">备注：${esc(c.remark)}</div>` : '';
+        html += `<td class="slot" rowspan="${rs}">
+          <div class="course" title="${escAttr(courseTooltip(c))}" style="background:${col}22;border-left:3px solid ${col}">
+            <div class="nm" style="color:${col}">${esc(c.name)}</div>
+            <div class="meta">${esc(meta)}</div>
+            <div class="meta" style="opacity:.7">${esc(c.weeksRaw||weekRangeText(c.weeks))}</div>
+            ${note}
+          </div></td>`;
+      } else {
+        html += '<td class="slot"></td>';
+      }
+    }
+    html += '</tr>';
+  }
+  html += '</table></div>';
+  area.innerHTML = html;
+
+  // 统计
+  const total = COURSES.length;
+  const ev = countEvents();
+  const term = scheduleLabel();
+  document.getElementById('stat').innerHTML =
+    `共 <b>${total}</b> 门课程安排 · 导出将生成 <b>${ev}</b> 条日程${term ? ' · '+esc(term) : ''}`;
+}
+function weekRangeText(weeks){ if(!weeks.length) return ''; return `第${weeks[0]}-${weeks[weeks.length-1]}周`; }
+function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function escAttr(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function courseDetailLines(c){
+  return [
+    c.teacher ? '教师：'+c.teacher : '',
+    c.teachingClass ? '教学班名称：'+c.teachingClass : '',
+    c.classComposition ? '教学班组成：'+c.classComposition : '',
+    c.assessment ? '考核方式：'+c.assessment : '',
+    c.remark ? '选课备注：'+c.remark : '',
+    c.hours ? '课程学时组成：'+c.hours : '',
+    c.weeklyHours ? '周学时：'+c.weeklyHours : '',
+    c.totalHours ? '总学时：'+c.totalHours : '',
+    c.credits ? '学分：'+c.credits : '',
+    c.marker ? '课程标记：'+c.marker : ''
+  ].filter(Boolean);
+}
+function courseTooltip(c){
+  return [
+    '课程：'+c.name,
+    `上课：${WEEK_NAMES[c.weekday-1]||''} 第${c.periodStart}-${c.periodEnd}节`,
+    c.weeksRaw ? '周次：'+c.weeksRaw : '',
+    c.place ? '上课地点：'+c.place : '',
+    ...courseDetailLines(c)
+  ].filter(Boolean).join('\n');
+}
+
+/* ============================================================
+   导出 ICS
+   ============================================================ */
+function countEvents(){
+  let n=0; COURSES.forEach(c=>n+=c.weeks.length); return n;
+}
+
+function exportICS(){
+  const base = mondayDate();
+  if(!base){ alert('请先在「第2步」选择第一周 周一的日期'); return; }
+
+  // 校验时间
+  for(const c of COURSES){
+    if(!getTime(c.periodStart,'s') || !getTime(c.periodEnd,'e')){
+      alert(`第 ${c.periodStart}~${c.periodEnd} 节缺少上下课时间，请在第2步补全`); return;
+    }
+  }
+
+  const calendarName = scheduleLabel() ? `${scheduleLabel()} 课程表` : '我的课程表';
+  const lines = [
+    'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//ScheduleHelper//ZhengFang//CN',
+    'CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:'+ics(calendarName),
+    'BEGIN:VTIMEZONE','TZID:Asia/Shanghai',
+    'BEGIN:STANDARD','DTSTART:19700101T000000','TZOFFSETFROM:+0800','TZOFFSETTO:+0800','TZNAME:CST','END:STANDARD',
+    'END:VTIMEZONE'
+  ];
+
+  let uid=0;
+  const stamp = toICSDateTimeUTC(new Date());
+  COURSES.forEach(c=>{
+    const [sh,sm] = getTime(c.periodStart,'s').split(':').map(Number);
+    const [eh,em] = getTime(c.periodEnd,'e').split(':').map(Number);
+    c.weeks.forEach(w=>{
+      const day = dateOf(w, c.weekday); if(!day) return;
+      const dtStart = toICSLocal(day, sh, sm);
+      const dtEnd   = toICSLocal(day, eh, em);
+      const desc = [
+        scheduleLabel() ? '学年学期：'+scheduleLabel() : '',
+        `上课时间：${WEEK_NAMES[c.weekday-1]||''} 第${c.periodStart}-${c.periodEnd}节`,
+        c.weeksRaw? '周次：'+c.weeksRaw : '',
+        c.place ? '上课地点：'+c.place : '',
+        ...courseDetailLines(c)
+      ].filter(Boolean).join('\n');
+      lines.push('BEGIN:VEVENT');
+      lines.push('UID:'+(++uid)+'-'+dtStart+'@schedule-helper');
+      lines.push('DTSTAMP:'+stamp);
+      lines.push('DTSTART;TZID=Asia/Shanghai:'+dtStart);
+      lines.push('DTEND;TZID=Asia/Shanghai:'+dtEnd);
+      lines.push('SUMMARY:'+ics(c.name));
+      if(c.place) lines.push('LOCATION:'+ics(c.place));
+      if(desc) lines.push('DESCRIPTION:'+ics(desc));
+      lines.push('END:VEVENT');
+    });
+  });
+  lines.push('END:VCALENDAR');
+
+  const blob = new Blob([lines.join('\r\n')],{type:'text/calendar;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download=safeFileName(calendarName)+'.ics'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function pad(n){ return String(n).padStart(2,'0'); }
+function toICSLocal(d, h, m){
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}T${pad(h)}${pad(m)}00`;
+}
+function toICSDateTimeUTC(d){
+  return `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+}
+function ics(s){ return (s||'').replace(/([,;\\])/g,'\\$1').replace(/\n/g,'\\n'); }
+function safeFileName(s){ return (s||'我的课程表').replace(/[\\/:*?"<>|]/g,'_'); }
+
+/* ============================================================
+   示例数据 & 启动
+   ============================================================ */
+function loadDemo(){
+  document.getElementById('htmlInput').value = DEMO_HTML;
+  parseSchedule();
+}
+const DEMO_HTML = `
+<table><tr><td id="jc_4-7-8" rowspan="1"><span class="festival">7-8</span></td>
+<td><div class="timetable_con text-left"><span class="title"><font color="blue">数学建模(双语)◇</font></span>
+<p><font color="blue">周数：1-7周</font><font color="blue">校区:南区 上课地点：31-0101 </font>
+<font color="blue">教师 ：何兴</font></p></div></td></tr>
+<tr><td id="jc_1-1-2" rowspan="1"><span class="festival">1-2</span></td>
+<td><div class="timetable_con text-left"><span class="title"><font>高等数学</font></span>
+<p><font>周数：1-16周</font><font>上课地点：12-0203 </font><font>教师 ：张伟</font></p></div></td></tr>
+<tr><td id="jc_2-3-4" rowspan="1"><span class="festival">3-4</span></td>
+<td><div class="timetable_con text-left"><span class="title"><font>大学英语</font></span>
+<p><font>周数：1-16周(单)</font><font>上课地点：8-0105 </font><font>教师 ：李娜</font></p></div></td></tr>
+<tr><td id="jc_3-9-10" rowspan="1"><span class="festival">9-10</span></td>
+<td><div class="timetable_con text-left"><span class="title"><font>体育</font></span>
+<p><font>周数：2-15周</font><font>上课地点：操场 </font><font>教师 ：王强</font></p></div></td></tr>`;
+
+// 设置默认第一周（本周一）
+function setDefaultMonday(){
+  const d=new Date(); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day);
+  document.getElementById('firstMonday').value =
+    `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+document.getElementById('ver').textContent = 'v1.1';
+initTimesTable();
+setDefaultMonday();
+
+/* ---------- 自动注入：检测 capture.py 抓取的数据 ---------- */
+function tryAutoLoad(){
+  const banner = document.getElementById('autoBanner');
+  const cap = window.CAPTURED_SCHEDULE;
+  if(cap && cap.html){
+    parseSchedule(cap.html);
+    const ok = COURSES.length>0;
+    banner.classList.add('show');
+    if(ok){
+      banner.innerHTML = `🎉 已自动载入由 <b>capture.py</b> 抓取的课表`+
+        `（${cap.capturedAt||''}），共解析 <b>${COURSES.length}</b> 门课程。`+
+        `请在下方设置第一周日期与作息时间后导出。`;
+      // 自动折叠手动区
+      const mb=document.getElementById('manualBox'); if(mb) mb.open=false;
+    } else {
+      banner.innerHTML = `⚠️ 检测到抓取数据但未能解析出课程。`+
+        `可能是该教务系统结构较特殊——请展开下方「手动粘贴」区，或把页面源码发我适配。`;
+    }
+  }
+}
+// captured.js 由 <script> 异步引入；用 onload 钩子 + 兜底轮询
+window.addEventListener('load', tryAutoLoad);
+</script>
+</body>
+</html>

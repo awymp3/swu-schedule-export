@@ -75,8 +75,8 @@ CFT_MIRROR = "https://registry.npmmirror.com/-/binary/chrome-for-testing"
 CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
 # 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
 CFT_FALLBACK_VERSION = "152.0.7951.0"
-# 每次 Windows 启动都会打印，用来确认没有误运行旧下载包中的脚本。
-BUILD_TAG = "2026.07.15-windows-browser-3"
+# 每次启动都会打印，用来确认没有误运行旧下载包中的脚本。
+BUILD_TAG = "2026.07.15-browser-4"
 
 # [代理] 自动探测：用真实 HTTP 请求验证代理是否可用，否则直连
 PROXY = "127.0.0.1:7897"
@@ -1237,6 +1237,11 @@ def main():
             driver = start_portable_windows_chrome(browser_path, driver_path)
         else:
             options = uc.ChromeOptions()
+            # 国内镜像目前提供的 undetected-chromedriver 3.1.6 会直接读取
+            # options.headless；而新版 Selenium 的 ChromeOptions 已不再预置该属性。
+            # 显式设为 False 后，两者可以正常协作，且仍以可见浏览器运行。
+            if not hasattr(options, "headless"):
+                options.headless = False
             options.add_argument("--disable-popup-blocking")
             options.add_argument("--no-first-run")
             options.add_argument("--no-default-browser-check")

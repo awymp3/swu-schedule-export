@@ -6,6 +6,10 @@ cd "$(dirname "$0")" || exit 1
 echo "============================================"
 echo "   📅 课程表助手 · 全自动抓取"
 echo "============================================"
+echo "   构建版本：2026.07.15-browser-4"
+echo "   Copyright (c) 2026 Jiapeng Lee"
+echo "   GitHub: https://github.com/awymp3/swu-schedule-export"
+echo "   Email: wadrqhh@gmail.com"
 echo
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -16,9 +20,9 @@ fi
 echo "🔍 检查依赖..."
 NEED=""
 python3 -c "import setuptools" 2>/dev/null || NEED="$NEED setuptools"
-python3 -c "import setuptools, undetected_chromedriver" 2>/dev/null || NEED="$NEED undetected-chromedriver"
+python3 -c "import setuptools, undetected_chromedriver; raise SystemExit(0 if undetected_chromedriver.__version__ == '3.1.6' else 1)" 2>/dev/null || NEED="$NEED undetected-chromedriver==3.1.6"
 python3 -c "import ddddocr" 2>/dev/null || NEED="$NEED ddddocr"
-python3 -c "import selenium" 2>/dev/null || NEED="$NEED selenium"
+python3 -c "import selenium; raise SystemExit(0 if selenium.__version__ == '4.9.1' else 1)" 2>/dev/null || NEED="$NEED selenium==4.9.1"
 python3 -c "import PIL" 2>/dev/null || NEED="$NEED pillow"
 if [ -n "$NEED" ]; then
   echo "📦 首次使用，正在安装依赖（清华镜像）：$NEED"

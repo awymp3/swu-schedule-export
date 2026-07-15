@@ -8,6 +8,10 @@ cd "$ROOT" || exit 1
 echo "============================================"
 echo "   课程表助手 · 全自动抓取"
 echo "============================================"
+echo "   构建版本：2026.07.15-browser-4"
+echo "   Copyright (c) 2026 Jiapeng Lee"
+echo "   GitHub: https://github.com/awymp3/swu-schedule-export"
+echo "   Email: wadrqhh@gmail.com"
 echo
 
 RUNTIME_DIR="$ROOT/.runtime"
@@ -17,6 +21,8 @@ PYTHON=""
 PIP_SCOPE=(--user)
 PIP_TUNA="https://pypi.tuna.tsinghua.edu.cn/simple"
 PIP_ALIYUN="https://mirrors.aliyun.com/pypi/simple/"
+UC_PACKAGE="undetected-chromedriver==3.1.6"
+SELENIUM_PACKAGE="selenium==4.9.1"
 # GitHub release downloads are routed through a China-accessible proxy first.
 # The official source remains a fallback when the proxy is unavailable.
 UV_GITHUB_PROXY="https://ghproxy.net/https://github.com"
@@ -107,9 +113,9 @@ fi
 echo "🔍 检查依赖..."
 NEED=()
 "$PYTHON" -c "import setuptools" 2>/dev/null || NEED+=(setuptools)
-"$PYTHON" -c "import setuptools, undetected_chromedriver" 2>/dev/null || NEED+=(undetected-chromedriver)
+"$PYTHON" -c "import setuptools, undetected_chromedriver; raise SystemExit(0 if undetected_chromedriver.__version__ == '3.1.6' else 1)" 2>/dev/null || NEED+=("$UC_PACKAGE")
 "$PYTHON" -c "import ddddocr" 2>/dev/null || NEED+=(ddddocr)
-"$PYTHON" -c "import selenium" 2>/dev/null || NEED+=(selenium)
+"$PYTHON" -c "import selenium; raise SystemExit(0 if selenium.__version__ == '4.9.1' else 1)" 2>/dev/null || NEED+=("$SELENIUM_PACKAGE")
 "$PYTHON" -c "import PIL" 2>/dev/null || NEED+=(pillow)
 if [ ${#NEED[@]} -gt 0 ]; then
   echo "📦 首次使用，正在安装依赖（清华镜像）：${NEED[*]}"

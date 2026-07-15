@@ -6,6 +6,10 @@
 
 本项目为个人维护的开源工具，与西南大学及其教务系统没有隶属、授权或合作关系。
 
+## 项目与联系
+
+Copyright © 2026 Jiapeng Lee。项目主页：[awymp3/swu-schedule-export](https://github.com/awymp3/swu-schedule-export)。问题反馈或建议可发送至 [wadrqhh@gmail.com](mailto:wadrqhh@gmail.com)。
+
 ## 使用前说明
 
 - 抓取课表时，需要连接西南大学校园网，或处于能够正常访问西南大学教务系统的校内网络环境。

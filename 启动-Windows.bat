@@ -61,6 +61,7 @@ if errorlevel 1 (
 
 echo Checking dependencies...
 set "NEED="
+%PY% -c "import setuptools" >nul 2>&1 || set "NEED=%NEED% setuptools"
 %PY% -c "import undetected_chromedriver" >nul 2>&1 || set "NEED=%NEED% undetected-chromedriver"
 %PY% -c "import ddddocr" >nul 2>&1 || set "NEED=%NEED% ddddocr"
 %PY% -c "import selenium" >nul 2>&1 || set "NEED=%NEED% selenium"

@@ -38,6 +38,21 @@ from PIL import Image as _PILImage
 if not hasattr(_PILImage, "ANTIALIAS"):
     _PILImage.ANTIALIAS = _PILImage.LANCZOS
 
+# Python 3.12 移除了标准库 distutils，但 undetected-chromedriver 仍会导入
+# distutils.version。setuptools 提供兼容实现；这里在导入第三方库前注册它。
+try:
+    import distutils.version  # Python 3.11 及更早版本
+except ModuleNotFoundError:
+    try:
+        import setuptools._distutils as _setuptools_distutils
+        import setuptools._distutils.version as _setuptools_distutils_version
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "缺少 setuptools，无法为 Python 3.12+ 提供 distutils 兼容层。"
+        ) from exc
+    sys.modules.setdefault("distutils", _setuptools_distutils)
+    sys.modules.setdefault("distutils.version", _setuptools_distutils_version)
+
 import undetected_chromedriver as uc
 import ddddocr
 from selenium.webdriver.common.by import By

@@ -106,6 +106,7 @@ fi
 
 echo "🔍 检查依赖..."
 NEED=()
+"$PYTHON" -c "import setuptools" 2>/dev/null || NEED+=(setuptools)
 "$PYTHON" -c "import undetected_chromedriver" 2>/dev/null || NEED+=(undetected-chromedriver)
 "$PYTHON" -c "import ddddocr" 2>/dev/null || NEED+=(ddddocr)
 "$PYTHON" -c "import selenium" 2>/dev/null || NEED+=(selenium)

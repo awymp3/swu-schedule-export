@@ -6,7 +6,7 @@
 反检测登录方案：undetected_chromedriver + ddddocr 验证码识别
 
 流程（全自动）：
-  1. 首次运行弹窗输入账号密码（可勾选记住，本地保存到 account.json）
+  1. 首次运行输入西南大学统一身份认证账号和密码（可勾选记住，本地保存到 .env）
   2. 自动检测系统/Chrome版本，下载匹配的 chromedriver（淘宝镜像）
   3. 启动反检测 Chrome，自动登录（OCR 验证码，失败自动重试）
   4. 跳转西南大学个人课表页，选择学年/学期，抓取完整表格课表 DOM → captured.js
@@ -46,7 +46,7 @@ from selenium.webdriver.support import expected_conditions as EC
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
 CAPTURED_JS = os.path.join(HERE, "captured.js")
-ENV_FILE = os.path.join(HERE, ".env")                # 本地保存账号（首次输入后）
+ENV_FILE = os.path.join(HERE, ".env")                # 本地保存统一身份认证信息（首次输入后）
 LEGACY_ACCOUNT_FILE = os.path.join(HERE, "account.json")
 DRIVER_DIR = os.path.join(HERE, "drivers")          # 各平台 chromedriver 缓存目录
 
@@ -263,9 +263,12 @@ def prepare_driver(major):
     return path
 
 
-# ================= 账号管理 =================
-ENV_USER_KEY = "ZHENGFANG_USERNAME"
-ENV_PASSWORD_KEY = "ZHENGFANG_PASSWORD"
+# ================= 统一身份认证信息管理 =================
+ENV_USER_KEY = "SWU_UNIFIED_ID_USERNAME"
+ENV_PASSWORD_KEY = "SWU_UNIFIED_ID_PASSWORD"
+# 兼容升级前已经写入 .env 的键名，读取后自动迁移为上面的新键名。
+LEGACY_ENV_USER_KEY = "ZHENGFANG_USERNAME"
+LEGACY_ENV_PASSWORD_KEY = "ZHENGFANG_PASSWORD"
 
 
 def read_env_file(path):
@@ -296,7 +299,7 @@ def read_env_file(path):
 
 
 def write_env_values(updates):
-    """仅更新账号键，保留 .env 内用户自行添加的其他配置。"""
+    """仅更新统一身份认证键，保留 .env 内用户自行添加的其他配置。"""
     lines = []
     seen = set()
     if os.path.exists(ENV_FILE):
@@ -324,14 +327,23 @@ def write_env_values(updates):
 
 
 def load_account():
-    """优先读取 .env；兼容旧 account.json，并在读取后自动迁移。"""
+    """优先读取 .env；兼容旧键名和旧 account.json，并自动迁移。"""
     env = read_env_file(ENV_FILE)
     username = os.environ.get(ENV_USER_KEY) or env.get(ENV_USER_KEY)
     password = os.environ.get(ENV_PASSWORD_KEY) or env.get(ENV_PASSWORD_KEY)
     if username and password:
         return username, password
 
-    # 一次性兼容旧版本数据，避免升级后要求用户再次输入账号密码。
+    # 一次性兼容升级前的 .env，避免改名后要求用户再次输入统一身份认证信息。
+    legacy_username = os.environ.get(LEGACY_ENV_USER_KEY) or env.get(LEGACY_ENV_USER_KEY)
+    legacy_password = os.environ.get(LEGACY_ENV_PASSWORD_KEY) or env.get(LEGACY_ENV_PASSWORD_KEY)
+    if legacy_username and legacy_password:
+        if env.get(LEGACY_ENV_USER_KEY) and env.get(LEGACY_ENV_PASSWORD_KEY):
+            write_env_values({ENV_USER_KEY: legacy_username, ENV_PASSWORD_KEY: legacy_password})
+            log("已将旧 .env 中的登录信息迁移为统一身份认证配置", "SUCCESS")
+        return legacy_username, legacy_password
+
+    # 一次性兼容更早版本的数据，避免升级后要求用户再次输入统一身份认证信息。
     if os.path.exists(LEGACY_ACCOUNT_FILE):
         try:
             with open(LEGACY_ACCOUNT_FILE, "r", encoding="utf-8") as f:
@@ -339,7 +351,7 @@ def load_account():
             username, password = legacy.get("username"), legacy.get("password")
             if username and password:
                 write_env_values({ENV_USER_KEY: username, ENV_PASSWORD_KEY: password})
-                log("已将旧 account.json 中的账号迁移到 .env", "SUCCESS")
+                log("已将旧 account.json 中的登录信息迁移到 .env", "SUCCESS")
                 return username, password
         except Exception:
             pass
@@ -349,13 +361,13 @@ def load_account():
 def save_account(username, password):
     try:
         write_env_values({ENV_USER_KEY: username, ENV_PASSWORD_KEY: password})
-        log("账号已保存到本地 .env（下次免输入）", "SUCCESS")
+        log("统一身份认证信息已保存到本地 .env（下次免输入）", "SUCCESS")
     except Exception as e:
-        log(f"账号保存失败: {e}", "WARN")
+        log(f"登录信息保存失败: {e}", "WARN")
 
 
 def prompt_account_gui():
-    """弹出图形窗口让用户输入账号密码。返回 (username, password, remember)。
+    """弹出图形窗口让用户输入统一身份认证信息。返回 (username, password, remember)。
     无图形环境时回退到终端输入。"""
     try:
         import tkinter as tk
@@ -366,7 +378,7 @@ def prompt_account_gui():
     result = {"u": None, "p": None, "remember": True, "ok": False}
 
     root = tk.Tk()
-    root.title("教务账号登录")
+    root.title("西南大学统一身份认证")
     root.resizable(False, False)
     W, H = 360, 230
     root.update_idletasks()
@@ -379,8 +391,8 @@ def prompt_account_gui():
         pass
 
     pad = {"padx": 18}
-    tk.Label(root, text="请输入教务系统账号", font=("", 14, "bold")).pack(pady=(18, 4))
-    tk.Label(root, text="账号密码仅保存在你本机，用于自动登录", fg="#888", font=("", 10)).pack(pady=(0, 10))
+    tk.Label(root, text="请输入西南大学统一身份认证账号", font=("", 14, "bold")).pack(pady=(18, 4))
+    tk.Label(root, text="登录信息仅保存在本机 .env，用于自动登录", fg="#888", font=("", 10)).pack(pady=(0, 10))
 
     frm = tk.Frame(root); frm.pack(fill="x", **pad)
     tk.Label(frm, text="账号", width=5, anchor="e").grid(row=0, column=0, pady=5)
@@ -389,12 +401,12 @@ def prompt_account_gui():
     e_pwd = tk.Entry(frm, width=26, show="•"); e_pwd.grid(row=1, column=1, pady=5, padx=6)
 
     var_remember = tk.BooleanVar(value=True)
-    tk.Checkbutton(root, text="记住账号（下次免输入）", variable=var_remember).pack(pady=4)
+    tk.Checkbutton(root, text="记住登录信息（下次免输入）", variable=var_remember).pack(pady=4)
 
     def submit():
         u, p = e_user.get().strip(), e_pwd.get().strip()
         if not u or not p:
-            messagebox.showwarning("提示", "请填写账号和密码")
+            messagebox.showwarning("提示", "请填写统一身份认证账号和密码")
             return
         result.update(u=u, p=p, remember=var_remember.get(), ok=True)
         root.destroy()
@@ -412,24 +424,24 @@ def prompt_account_gui():
 def prompt_account_cli():
     """终端输入回退方案。"""
     import getpass
-    print("\n请输入教务系统账号（仅保存在本机）：")
-    u = input("  账号: ").strip()
+    print("\n请输入西南大学统一身份认证账号（仅保存在本机 .env）：")
+    u = input("  统一认证账号: ").strip()
     p = getpass.getpass("  密码: ").strip()
-    ans = input("  记住账号？下次免输入 [Y/n]: ").strip().lower()
+    ans = input("  记住登录信息？下次免输入 [Y/n]: ").strip().lower()
     return (u or None), (p or None), (ans != "n")
 
 
 def resolve_account():
-    """优先用本地保存的账号；没有则弹窗输入并按需保存。设置全局 USERNAME/PASSWORD。"""
+    """优先用本地保存的统一身份认证信息；没有则输入并按需保存。"""
     global USERNAME, PASSWORD
     u, p = load_account()
     if u and p:
-        log(f"已加载本地账号: {u}", "SUCCESS")
+        log("已加载本地统一身份认证信息", "SUCCESS")
         USERNAME, PASSWORD = u, p
         return True
     u, p, remember = prompt_account_gui()
     if not u or not p:
-        log("未输入账号，已取消", "WARN")
+        log("未输入统一身份认证信息，已取消", "WARN")
         return False
     USERNAME, PASSWORD = u, p
     if remember:
@@ -493,7 +505,7 @@ def login_procedure(driver):
             driver.refresh()
             return False
 
-        log("注入账号密码...", "INFO")
+        log("填写统一身份认证信息...", "INFO")
         driver.execute_script(f"document.getElementById('{ID_USER}').value=arguments[0];", USERNAME)
         driver.execute_script(f"document.getElementById('{ID_PWD}').value=arguments[0];", PASSWORD)
         driver.execute_script(f"document.getElementById('{ID_CODE}').value=arguments[0];", code)
@@ -726,8 +738,8 @@ def main():
                 break
             time.sleep(2)
         if not ok:
-            log("三次登录均失败，请检查网络/代理/账号", "ERROR")
-            log("如账号密码已变更，请删除 account.json 后重试", "INFO")
+            log("三次登录均失败，请检查网络、代理或统一身份认证信息", "ERROR")
+            log("如统一身份认证信息已变更，请删除 .env 后重试", "INFO")
             return
 
         # 进入课表页

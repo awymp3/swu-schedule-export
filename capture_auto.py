@@ -409,12 +409,24 @@ def prompt_account_gui():
             messagebox.showwarning("提示", "请填写统一身份认证账号和密码")
             return
         result.update(u=u, p=p, remember=var_remember.get(), ok=True)
-        root.destroy()
+        # 先隐藏窗口，再退出事件循环。某些 Windows Tk 版本在回调内直接
+        # destroy() 后仍会把顶层窗口留在前台一小段时间。
+        root.withdraw()
+        root.quit()
+
+    def cancel():
+        root.withdraw()
+        root.quit()
 
     tk.Button(root, text="登录", width=12, command=submit).pack(pady=8)
     e_user.focus_set()
     root.bind("<Return>", lambda e: submit())
+    root.protocol("WM_DELETE_WINDOW", cancel)
     root.mainloop()
+    try:
+        root.destroy()
+    except Exception:
+        pass
 
     if not result["ok"]:
         return None, None, False
@@ -542,18 +554,29 @@ COURSE_SELECTORS = ["div.timetable_con", "td[id^='jc_']", "#kbtable", "table.kbc
 
 
 def get_term_info(driver):
-    """读取真实 select 选中项，而不是 Chosen 插件可能滞后的显示文字。"""
+    """读取真实 select 及其全部选项，而不是 Chosen 插件可能滞后的显示文字。"""
     return driver.execute_script("""
     function getSelect(id) {
-      var el = document.getElementById(id);
-      if (!el) return null;
-      var options = Array.prototype.map.call(el.options || [], function (o) {
+      var el = document.getElementById(id) || document.querySelector('select[name="' + id + '"]');
+      var chosen = document.getElementById(id + '_chosen');
+      if (!el && !chosen) return null;
+      var options = Array.prototype.map.call((el && el.options) || [], function (o) {
         return {value: o.value, text: (o.textContent || '').trim()};
       }).filter(function (o) { return o.value && o.text; });
-      var selected = el.options && el.options[el.selectedIndex];
+      // 正方会延后填充原生 select。若它尚未可用，退回 Chosen 的选项文本，
+      // 这样用户至少能看到可选择的学年和学期。
+      if (!options.length && chosen) {
+        options = Array.prototype.map.call(
+          chosen.querySelectorAll('.chosen-results li[data-option-array-index]'),
+          function (li) { return {value: '', text: (li.textContent || '').trim()}; }
+        ).filter(function (o) { return o.text && o.text !== '---请选择---'; });
+      }
+      var selected = el && el.options && el.options[el.selectedIndex];
+      var chosenText = chosen && chosen.querySelector('.chosen-spanText');
       return {
         value: selected ? selected.value : '',
-        text: selected ? (selected.textContent || '').trim() : '',
+        text: selected ? (selected.textContent || '').trim() :
+          (chosenText ? (chosenText.textContent || '').trim() : ''),
         options: options
       };
     }
@@ -564,6 +587,25 @@ def get_term_info(driver):
       timetableTitle: title ? (title.textContent || '').replace(/\\s+/g, ' ').trim() : ''
     };
     """) or {}
+
+
+def wait_for_term_options(driver, timeout=12):
+    """等待正方页面异步填充学年/学期下拉框；超时仍返回最后一次读取结果。"""
+    deadline = time.time() + timeout
+    latest = {}
+    while time.time() < deadline:
+        latest = get_term_info(driver)
+        year = latest.get("academicYear") or {}
+        term = latest.get("term") or {}
+        if len(year.get("options", [])) > 1 and len(term.get("options", [])) > 1:
+            return latest
+        time.sleep(0.4)
+    return latest or get_term_info(driver)
+
+
+def option_texts(options):
+    """把页面原有的选项完整显示给用户，不截断历史学年。"""
+    return "、".join(o.get("text", "") for o in options if o.get("text")) or "（页面暂未提供选项）"
 
 
 def set_select_by_label(driver, element_id, wanted):
@@ -585,19 +627,18 @@ def set_select_by_label(driver, element_id, wanted):
 
 def choose_academic_term(driver):
     """让用户按需选择历史/未来学期；直接回车则保留页面当前学期。"""
-    info = get_term_info(driver)
+    info = wait_for_term_options(driver)
     year = info.get("academicYear") or {}
     term = info.get("term") or {}
     if not year or not term:
         log("页面没有标准的学年/学期下拉框，将抓取当前课表", "WARN")
         return info
 
-    years = "、".join(o["text"] for o in year.get("options", [])[:8])
-    terms = "、".join(o["text"] for o in term.get("options", []))
+    original_year = year.get("value")
+    original_term = term.get("value")
     print("\n  选择要导出的课表（直接回车保留当前选择）：")
     print(f"  当前：{year.get('text') or '未选择'} 学年，第 {term.get('text') or '未选择'} 学期")
-    print(f"  可选学年：{years}")
-    print(f"  可选学期：{terms}")
+    print(f"  可选学年：{option_texts(year.get('options', []))}")
     try:
         wanted_year = input(f"  学年 [{year.get('text', '')}]: ").strip()
         if wanted_year:
@@ -606,8 +647,14 @@ def choose_academic_term(driver):
                 log(f"学年“{wanted_year}”不可用，保留当前选择", "WARN")
             else:
                 log(f"已选择学年：{result['text']}", "SUCCESS")
-                # 有些学校会在切换学年后异步刷新学期选项。
-                time.sleep(0.8)
+                # 学期选项与学年关联，切换后等待页面重新填充，再读取一次。
+                info = wait_for_term_options(driver)
+                term = info.get("term") or {}
+        else:
+            info = get_term_info(driver)
+            term = info.get("term") or term
+
+        print(f"  可选学期：{option_texts(term.get('options', []))}")
         wanted_term = input(f"  学期 [{term.get('text', '')}]: ").strip()
         if wanted_term:
             result = set_select_by_label(driver, "xqm", wanted_term)
@@ -621,8 +668,8 @@ def choose_academic_term(driver):
         return get_term_info(driver)
 
     updated = get_term_info(driver)
-    changed = ((updated.get("academicYear") or {}).get("value") != year.get("value") or
-               (updated.get("term") or {}).get("value") != term.get("value"))
+    changed = ((updated.get("academicYear") or {}).get("value") != original_year or
+               (updated.get("term") or {}).get("value") != original_term)
     if changed:
         log("正在查询所选学年/学期的课表...", "INFO")
         driver.execute_script("""

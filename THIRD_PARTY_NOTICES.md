@@ -8,6 +8,6 @@
 | [undetected-chromedriver](https://github.com/ultrafunkamsterdam/undetected-chromedriver) | Chrome 驱动封装 | GPL-3.0 |
 | [ddddocr](https://github.com/sml2h3/ddddocr) | 本地验证码识别 | MIT License |
 | [Pillow](https://python-pillow.org/) | 图像处理 | HPND License |
-| [uv](https://github.com/astral-sh/uv) | 无系统 Python 时下载项目本地运行时 | Apache License 2.0 或 MIT License |
+| [uv](https://github.com/astral-sh/uv) | macOS 无系统 Python 时下载项目本地运行时 | Apache License 2.0 或 MIT License |
 
 项目中的启动脚本只负责下载这些组件，不会把它们的二进制文件提交到仓库。首次运行后生成的 `.runtime/`、`drivers/` 等目录均已排除在 Git 之外。

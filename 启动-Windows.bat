@@ -11,6 +11,13 @@ echo    Schedule Helper - Automatic Capture
 echo ============================================
 echo.
 
+REM China-friendly sources: TUNA first, then Aliyun, then official PyPI.
+set "PIP_TUNA=https://pypi.tuna.tsinghua.edu.cn/simple"
+set "PIP_ALIYUN=https://mirrors.aliyun.com/pypi/simple/"
+set "PYTHON_VERSION=3.12.10"
+set "PYTHON_MIRROR=https://mirrors.aliyun.com/python-release/windows"
+set "PYTHON_OFFICIAL=https://www.python.org/ftp/python/%PYTHON_VERSION%"
+
 set "PY="
 set "PIP_SCOPE=--user"
 
@@ -48,11 +55,15 @@ set "NEED="
 %PY% -c "import PIL" >nul 2>&1 || set "NEED=%NEED% pillow"
 
 if not "%NEED%"=="" (
-  echo Installing required packages:%NEED%
-  %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check %NEED% -i https://pypi.tuna.tsinghua.edu.cn/simple
+  echo Installing required packages from the Tsinghua mirror:%NEED%
+  %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --timeout 30 --retries 3 --index-url "%PIP_TUNA%" %NEED%
   if errorlevel 1 (
-    echo Mirror install failed. Retrying with the official PyPI source...
-    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check %NEED%
+    echo Tsinghua mirror failed. Retrying with the Aliyun mirror...
+    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --timeout 30 --retries 3 --index-url "%PIP_ALIYUN%" %NEED%
+  )
+  if errorlevel 1 (
+    echo China mirrors failed. Retrying with the official PyPI source...
+    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --timeout 30 --retries 3 %NEED%
   )
   if errorlevel 1 (
     echo [ERROR] Dependencies could not be installed. Check your network, then retry.
@@ -81,36 +92,46 @@ exit /b 1
 :install_local_python
 set "RUNTIME_DIR=%ROOT%.runtime"
 set "PYTHON_DIR=%RUNTIME_DIR%\python"
-set "LOCAL_PY="
-for /f "delims=" %%F in ('dir /b /s "%PYTHON_DIR%\python.exe" 2^>nul') do if not defined LOCAL_PY set "LOCAL_PY=%%F"
-if defined LOCAL_PY (
+set "LOCAL_PY=%PYTHON_DIR%\python.exe"
+if exist "%LOCAL_PY%" (
   "%LOCAL_PY%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
   if not errorlevel 1 exit /b 0
-  set "LOCAL_PY="
 )
+set "LOCAL_PY="
 
 mkdir "%RUNTIME_DIR%" >nul 2>&1
-set "UV_DIR=%RUNTIME_DIR%\uv"
-set "UV_EXE=%UV_DIR%\uv.exe"
-if not exist "%UV_EXE%" (
-  echo Python 3 was not found. Downloading a local runtime...
-  set "UV_INSTALLER=%RUNTIME_DIR%\install-uv.ps1"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri 'https://astral.sh/uv/install.ps1' -OutFile '%UV_INSTALLER%'"
-  if errorlevel 1 exit /b 1
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:UV_INSTALL_DIR='%UV_DIR%'; $env:UV_NO_MODIFY_PATH='1'; & '%UV_INSTALLER%'"
-  if errorlevel 1 exit /b 1
-)
-if not exist "%UV_EXE%" (
-  set "UV_EXE_FOUND="
-  for /f "delims=" %%F in ('dir /b /s "%UV_DIR%\uv.exe" 2^>nul') do if not defined UV_EXE_FOUND set "UV_EXE_FOUND=%%F"
-  if defined UV_EXE_FOUND set "UV_EXE=%UV_EXE_FOUND%"
-)
-if not exist "%UV_EXE%" exit /b 1
+echo Python 3 was not found. Downloading a local runtime from the Aliyun mirror...
 
-"%UV_EXE%" python install --install-dir "%PYTHON_DIR%" --no-bin 3.12
+set "PYTHON_ARCH=amd64"
+if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "PYTHON_ARCH=arm64"
+if /I "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "PYTHON_ARCH=arm64"
+if /I "%PROCESSOR_ARCHITECTURE%"=="x86" set "PYTHON_ARCH=x86"
+set "PYTHON_INSTALLER_NAME=python-%PYTHON_VERSION%-%PYTHON_ARCH%.exe"
+if /I "%PYTHON_ARCH%"=="x86" set "PYTHON_INSTALLER_NAME=python-%PYTHON_VERSION%.exe"
+set "PYTHON_INSTALLER=%RUNTIME_DIR%\%PYTHON_INSTALLER_NAME%"
+
+call :download_file "%PYTHON_MIRROR%/%PYTHON_INSTALLER_NAME%" "%PYTHON_INSTALLER%"
+if errorlevel 1 (
+  echo Aliyun mirror failed. Retrying with the official Python source...
+  call :download_file "%PYTHON_OFFICIAL%/%PYTHON_INSTALLER_NAME%" "%PYTHON_INSTALLER%"
+)
 if errorlevel 1 exit /b 1
-for /f "delims=" %%F in ('dir /b /s "%PYTHON_DIR%\python.exe" 2^>nul') do if not defined LOCAL_PY set "LOCAL_PY=%%F"
+
+echo Installing the project-local Python runtime...
+"%PYTHON_INSTALLER%" /quiet InstallAllUsers=0 TargetDir="%PYTHON_DIR%" PrependPath=0 Include_pip=1 Include_test=0 Include_doc=0 Include_tcltk=0 Include_launcher=0 Shortcuts=0
+if errorlevel 1 exit /b 1
+del /q "%PYTHON_INSTALLER%" >nul 2>&1
+
+if not exist "%LOCAL_PY%" (
+  for /f "delims=" %%F in ('dir /b /s "%PYTHON_DIR%\python.exe" 2^>nul') do if not defined LOCAL_PY set "LOCAL_PY=%%F"
+)
 if not defined LOCAL_PY exit /b 1
 "%LOCAL_PY%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
 if errorlevel 1 exit /b 1
 exit /b 0
+
+:download_file
+set "DOWNLOAD_URL=%~1"
+set "DOWNLOAD_FILE=%~2"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -Uri $env:DOWNLOAD_URL -OutFile $env:DOWNLOAD_FILE -ErrorAction Stop; exit 0 } catch { exit 1 }"
+exit /b %ERRORLEVEL%

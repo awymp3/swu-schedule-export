@@ -21,7 +21,13 @@ python3 -c "import selenium" 2>/dev/null || NEED="$NEED selenium"
 python3 -c "import PIL" 2>/dev/null || NEED="$NEED pillow"
 if [ -n "$NEED" ]; then
   echo "📦 首次使用，正在安装依赖（清华镜像）：$NEED"
-  pip3 install $NEED -i https://pypi.tuna.tsinghua.edu.cn/simple
+  if ! pip3 install $NEED --prefer-binary --timeout 30 --retries 3 -i https://pypi.tuna.tsinghua.edu.cn/simple; then
+    echo "⚠️ 清华镜像安装失败，改用阿里云镜像重试…"
+    if ! pip3 install $NEED --prefer-binary --timeout 30 --retries 3 -i https://mirrors.aliyun.com/pypi/simple/; then
+      echo "⚠️ 阿里云镜像安装失败，改用官方 PyPI 重试…"
+      pip3 install $NEED --prefer-binary --timeout 30 --retries 3 || exit 1
+    fi
+  fi
 fi
 # 图形输入窗口需要 tkinter
 python3 -c "import tkinter" 2>/dev/null || echo "⚠️ 未装 tkinter，账号将用终端输入。如需弹窗：sudo apt install python3-tk"

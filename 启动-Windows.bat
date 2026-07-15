@@ -1,12 +1,5 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-REM Keep the same console alive even if a child installer or Python process exits unexpectedly.
-REM The inner invocation returns to `cmd /k`; normal script completion still shows the usual pause.
-if not defined SWU_SCHEDULE_KEEP_CONSOLE (
-  set "SWU_SCHEDULE_KEEP_CONSOLE=1"
-  cmd.exe /d /k call "%~f0"
-  exit /b
-)
 
 REM This launcher is ASCII-only so it can run under every cmd.exe code page.
 chcp 65001 >nul 2>&1

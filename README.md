@@ -99,7 +99,7 @@ chmod +x 启动-Mac.command
 
 ## 贡献者
 
-- Windows 测试：Oscar Jin <oscarjin267@gmail.com>
+- Windows 端测试：Oscar Jin <oscarjin267@gmail.com>
 
 ## 开源许可
 

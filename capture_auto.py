@@ -21,11 +21,13 @@ import sys
 import ssl
 import time
 import json
+import re
 import zipfile
 import subprocess
 import platform
 import webbrowser
 import urllib.request
+from html import unescape
 
 # 关闭 SSL 证书校验（避免本机缺少 CA 证书导致请求失败）
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -371,7 +373,7 @@ def prompt_account_gui():
     无图形环境时回退到终端输入。"""
     try:
         import tkinter as tk
-        from tkinter import messagebox
+        from tkinter import messagebox, ttk
     except Exception:
         return prompt_account_cli()
 
@@ -380,47 +382,55 @@ def prompt_account_gui():
     root = tk.Tk()
     root.title("西南大学统一身份认证")
     root.resizable(False, False)
-    W, H = 360, 230
+    root.configure(bg="#f3f6fb")
+    W, H = 430, 282
     root.update_idletasks()
     x = (root.winfo_screenwidth() - W) // 2
     y = (root.winfo_screenheight() - H) // 2
     root.geometry(f"{W}x{H}+{x}+{y}")
+
+    style = ttk.Style(root)
     try:
-        root.attributes("-topmost", True)
+        style.theme_use("clam")
     except Exception:
         pass
+    style.configure("LoginCard.TFrame", background="#ffffff")
+    style.configure("LoginTitle.TLabel", background="#ffffff", foreground="#172033",
+                    font=("Microsoft YaHei", 15, "bold"))
+    style.configure("LoginNote.TLabel", background="#ffffff", foreground="#667085",
+                    font=("Microsoft YaHei", 9))
+    style.configure("LoginField.TLabel", background="#ffffff", foreground="#344054",
+                    font=("Microsoft YaHei", 10))
+    style.configure("Login.TCheckbutton", background="#ffffff", font=("Microsoft YaHei", 9))
+    style.configure("Login.TButton", background="#1769e0", foreground="#ffffff",
+                    font=("Microsoft YaHei", 10, "bold"), padding=(12, 7))
+    style.map("Login.TButton", background=[("active", "#1259c2")])
 
-    pad = {"padx": 18}
-    tk.Label(root, text="请输入西南大学统一身份认证账号", font=("", 14, "bold")).pack(pady=(18, 4))
-    tk.Label(root, text="登录信息仅保存在本机 .env，用于自动登录", fg="#888", font=("", 10)).pack(pady=(0, 10))
+    card = ttk.Frame(root, style="LoginCard.TFrame", padding=(28, 22, 28, 20))
+    card.pack(fill="both", expand=True, padx=12, pady=12)
+    ttk.Label(card, text="西南大学统一身份认证", style="LoginTitle.TLabel").pack(anchor="w")
+    ttk.Label(card, text="登录信息仅保存在本机 .env 中，用于自动登录",
+              style="LoginNote.TLabel").pack(anchor="w", pady=(4, 15))
 
-    frm = tk.Frame(root); frm.pack(fill="x", **pad)
-    tk.Label(frm, text="账号", width=5, anchor="e").grid(row=0, column=0, pady=5)
-    e_user = tk.Entry(frm, width=26); e_user.grid(row=0, column=1, pady=5, padx=6)
-    tk.Label(frm, text="密码", width=5, anchor="e").grid(row=1, column=0, pady=5)
-    e_pwd = tk.Entry(frm, width=26, show="•"); e_pwd.grid(row=1, column=1, pady=5, padx=6)
+    frm = ttk.Frame(card, style="LoginCard.TFrame"); frm.pack(fill="x")
+    frm.columnconfigure(1, weight=1)
+    ttk.Label(frm, text="账号", style="LoginField.TLabel", width=7).grid(row=0, column=0, pady=(0, 10), sticky="w")
+    e_user = ttk.Entry(frm, width=30); e_user.grid(row=0, column=1, pady=(0, 10), sticky="ew")
+    ttk.Label(frm, text="密码", style="LoginField.TLabel", width=7).grid(row=1, column=0, pady=(0, 4), sticky="w")
+    e_pwd = ttk.Entry(frm, width=30, show="•"); e_pwd.grid(row=1, column=1, pady=(0, 4), sticky="ew")
 
     var_remember = tk.BooleanVar(value=True)
-    tk.Checkbutton(root, text="记住登录信息（下次免输入）", variable=var_remember).pack(pady=4)
+    ttk.Checkbutton(card, text="记住登录信息（下次免输入）", variable=var_remember,
+                    style="Login.TCheckbutton").pack(anchor="w", pady=(8, 10))
 
     def close_dialog():
-        """Windows 上显式撤销置顶并销毁窗口，避免确认后遗留前台空窗。"""
-        try:
-            root.attributes("-topmost", False)
-        except Exception:
-            pass
+        """先立即隐藏，再由 Tk 的空闲回调销毁，避免 Windows 遗留前台窗口。"""
         try:
             root.withdraw()
             root.update_idletasks()
         except Exception:
             pass
-        try:
-            root.quit()
-        finally:
-            try:
-                root.destroy()
-            except Exception:
-                pass
+        root.after_idle(root.destroy)
 
     def submit():
         u, p = e_user.get().strip(), e_pwd.get().strip()
@@ -433,7 +443,7 @@ def prompt_account_gui():
     def cancel():
         close_dialog()
 
-    tk.Button(root, text="登录", width=12, command=submit).pack(pady=8)
+    ttk.Button(card, text="登录", width=12, command=submit, style="Login.TButton").pack(anchor="e")
     e_user.focus_set()
     root.bind("<Return>", lambda e: submit())
     root.protocol("WM_DELETE_WINDOW", cancel)
@@ -568,76 +578,101 @@ def login_procedure(driver):
 COURSE_SELECTORS = ["div.timetable_con", "td[id^='jc_']", "#kbtable", "table.kbcontent"]
 
 
+def _html_text(fragment):
+    """去除 HTML 标签并还原实体，保留页面中的实际可见文字。"""
+    return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", "", fragment))).strip()
+
+
+def _html_attr(attrs, name):
+    match = re.search(r"\b" + re.escape(name) + r"\s*=\s*(['\"])(.*?)\1", attrs,
+                      flags=re.I | re.S)
+    return unescape(match.group(2)).strip() if match else ""
+
+
+def _parse_select_from_html(source, select_id):
+    """直接从 page_source 解析正方原生 select，不依赖动态控件状态。"""
+    for attrs, body in re.findall(r"<select\b([^>]*)>(.*?)</select\s*>", source,
+                                  flags=re.I | re.S):
+        if _html_attr(attrs, "id") != select_id and _html_attr(attrs, "name") != select_id:
+            continue
+        options, by_index, selected = [], {}, None
+        raw_options = re.findall(r"<option\b([^>]*)>(.*?)</option\s*>", body, flags=re.I | re.S)
+        for index, (option_attrs, option_body) in enumerate(raw_options):
+            value = _html_attr(option_attrs, "value")
+            text = _html_text(option_body)
+            by_index[index] = value
+            if not value or not text or text == "---请选择---":
+                continue
+            item = {"value": value, "text": text, "index": index}
+            options.append(item)
+            if re.search(r"\bselected\b", option_attrs, flags=re.I):
+                selected = item
+        if selected is None and options:
+            selected = options[0]
+        return {"options": options, "by_index": by_index, "selected": selected}
+    return {"options": [], "by_index": {}, "selected": None}
+
+
+def _parse_chosen_from_html(source, select_id, native):
+    """直接解析 Chosen 容器内的 li；截图中的完整学年列表来自这里。"""
+    container = re.search(r"\bid\s*=\s*(['\"])" + re.escape(select_id) + r"_chosen\1",
+                          source, flags=re.I)
+    if not container:
+        return {"options": [], "selected": None}
+    tail = source[container.end():]
+    results = re.search(r"<ul\b[^>]*\bclass\s*=\s*(['\"])[^'\"]*\bchosen-results\b[^'\"]*\1[^>]*>",
+                        tail, flags=re.I | re.S)
+    if not results:
+        return {"options": [], "selected": None}
+    closing = re.search(r"</ul\s*>", tail[results.end():], flags=re.I)
+    if not closing:
+        return {"options": [], "selected": None}
+    body = tail[results.end():results.end() + closing.start()]
+    options, selected = [], None
+    for attrs, li_body in re.findall(r"<li\b([^>]*)>(.*?)</li\s*>", body, flags=re.I | re.S):
+        text = _html_text(li_body)
+        index_raw = _html_attr(attrs, "data-option-array-index")
+        if not text or text == "---请选择---" or not index_raw.isdigit():
+            continue
+        index = int(index_raw)
+        item = {"value": native["by_index"].get(index, ""), "text": text, "index": index}
+        options.append(item)
+        if "result-selected" in _html_attr(attrs, "class").split():
+            selected = item
+    return {"options": options, "selected": selected}
+
+
 def get_term_info(driver):
-    """读取真实 select 及其全部选项，而不是 Chosen 插件可能滞后的显示文字。"""
-    return driver.execute_script("""
-    function getSelect(id) {
-      var el = document.getElementById(id) || document.querySelector('select[name="' + id + '"]');
-      var chosen = document.getElementById(id + '_chosen');
-      if (!el && !chosen) return null;
-      var options = Array.prototype.map.call((el && el.options) || [], function (o) {
-        return {value: o.value, text: (o.textContent || '').trim()};
-      }).filter(function (o) { return o.value && o.text; });
-      // 正方的 Chosen 控件会在下拉框展开后才完整生成 li；它的列表比
-      // 隐藏 select 中的选项更完整时，按 data-option-array-index 读取它。
-      var chosenOptions = [];
-      if (chosen) {
-        chosenOptions = Array.prototype.map.call(
-          chosen.querySelectorAll('.chosen-results li[data-option-array-index]'),
-          function (li) {
-            var index = Number(li.getAttribute('data-option-array-index'));
-            var nativeOption = el && el.options ? el.options[index] : null;
-            return {
-              value: nativeOption ? nativeOption.value : '',
-              text: (li.textContent || '').trim(),
-              index: index
-            };
-          }
-        ).filter(function (o) { return o.text && o.text !== '---请选择---'; });
-      }
-      if (chosenOptions.length > options.length) options = chosenOptions;
-      var selected = el && el.options && el.options[el.selectedIndex];
-      var chosenText = chosen && chosen.querySelector('.chosen-spanText');
-      return {
-        value: selected ? selected.value : '',
-        text: selected ? (selected.textContent || '').trim() :
-          (chosenText ? (chosenText.textContent || '').trim() : ''),
-        options: options
-      };
-    }
-    var title = document.querySelector('#ylkbTable #table1 .timetable_title');
+    """直接从当前页面 HTML 解析 select 和 Chosen 列表，不需要先点开下拉框。"""
+    source = driver.page_source
+
+    def build(select_id):
+        native = _parse_select_from_html(source, select_id)
+        chosen = _parse_chosen_from_html(source, select_id, native)
+        options = chosen["options"] if len(chosen["options"]) > len(native["options"]) else native["options"]
+        selected = native["selected"] or chosen["selected"]
+        if selected is None and options:
+            selected = options[0]
+        return {
+            "value": selected["value"] if selected else "",
+            "text": selected["text"] if selected else "",
+            "options": options
+        }
+
+    title = re.search(r"<[^>]*\bclass\s*=\s*(['\"])[^'\"]*\btimetable_title\b[^'\"]*\1[^>]*>(.*?)</[^>]+>",
+                      source, flags=re.I | re.S)
     return {
-      academicYear: getSelect('xnm'),
-      term: getSelect('xqm'),
-      timetableTitle: title ? (title.textContent || '').replace(/\\s+/g, ' ').trim() : ''
-    };
-    """) or {}
-
-
-def expand_chosen_dropdowns(driver):
-    """让正方的 Chosen 控件生成完整列表，再由 get_term_info 读取。"""
-    driver.execute_script("""
-    ['xnm', 'xqm'].forEach(function (id) {
-      var el = document.getElementById(id) || document.querySelector('select[name="' + id + '"]');
-      var chosen = document.getElementById(id + '_chosen');
-      if (window.jQuery && el) {
-        window.jQuery(el).trigger('chosen:open');
-      } else {
-        var trigger = chosen && chosen.querySelector('.chosen-single');
-        if (trigger) trigger.click();
-      }
-    });
-    """)
+        "academicYear": build("xnm"),
+        "term": build("xqm"),
+        "timetableTitle": _html_text(title.group(2)) if title else ""
+    }
 
 
 def wait_for_term_options(driver, timeout=12):
-    """等待正方页面异步填充学年/学期下拉框；超时仍返回最后一次读取结果。"""
+    """等待页面 HTML 填充学年/学期选项；不操作浏览器中的下拉控件。"""
     deadline = time.time() + timeout
     latest = {}
     while time.time() < deadline:
-        # 截图所示的 li 由 Chosen 在展开时生成，先主动展开再读取。
-        expand_chosen_dropdowns(driver)
-        time.sleep(0.15)
         latest = get_term_info(driver)
         year = latest.get("academicYear") or {}
         term = latest.get("term") or {}
@@ -667,8 +702,13 @@ def set_select_by_label(driver, element_id, wanted):
       if (window.jQuery) window.jQuery(el).trigger('chosen:updated');
       return {ok: true, value: option.value, text: (option.textContent || '').trim()};
     }
-    // 有些正方页面只在 Chosen 视图中保留完整选项；交给控件自身完成同步。
+    // 有些正方页面只在 Chosen 视图中保留完整选项；先展开，再交给控件同步。
     var chosen = document.getElementById(id + '_chosen');
+    if (window.jQuery) window.jQuery(el).trigger('chosen:open');
+    else {
+      var trigger = chosen && chosen.querySelector('.chosen-single');
+      if (trigger) trigger.click();
+    }
     var item = chosen && Array.prototype.find.call(
       chosen.querySelectorAll('.chosen-results li.active-result'),
       function (li) { return (li.textContent || '').trim() === wanted; }

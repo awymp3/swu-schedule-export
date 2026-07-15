@@ -29,6 +29,9 @@ import platform
 import webbrowser
 import urllib.request
 import threading
+import socket
+import tempfile
+import shutil
 from html import unescape
 
 IS_MAC = platform.system().lower() == "darwin"
@@ -82,7 +85,7 @@ CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
 # 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
 CFT_FALLBACK_VERSION = "152.0.7951.0"
 # 每次启动都会打印，用来确认没有误运行旧下载包中的脚本。
-BUILD_TAG = "2026.07.15-browser-8"
+BUILD_TAG = "2026.07.15-browser-9"
 
 # 强制直连：不读取、不探测、也不使用系统或本地代理。
 # 教务系统、镜像下载和 chromedriver 本地通信均直接连接。
@@ -102,6 +105,8 @@ ID_TISHI = "tishi"
 # 运行时填充的账号（来自 .env 或弹窗输入）
 USERNAME = ""
 PASSWORD = ""
+WINDOWS_CAPTURE_CHROME = None
+WINDOWS_CAPTURE_PROFILE = None
 
 
 def setup_proxy():
@@ -136,7 +141,10 @@ def force_kill_chrome():
             os.system("pkill -9 -f 'Google Chrome' 2>/dev/null")
             os.system("pkill -9 -f 'chromedriver' 2>/dev/null")
         elif "windows" in sysname:
-            os.system("taskkill /F /IM chrome.exe /T >nul 2>&1")
+            # 不结束用户自己正在使用的 Chrome；仅清理由本程序启动的专用实例。
+            global WINDOWS_CAPTURE_CHROME
+            if WINDOWS_CAPTURE_CHROME and WINDOWS_CAPTURE_CHROME.poll() is None:
+                WINDOWS_CAPTURE_CHROME.terminate()
             os.system("taskkill /F /IM chromedriver.exe /T >nul 2>&1")
     except Exception:
         pass
@@ -458,24 +466,58 @@ def start_chrome_with_watchdog(options, kwargs, timeout=45):
 
 
 def start_windows_chrome(browser_path, driver_path):
-    """Windows 统一用标准 Selenium 驱动指定 Chrome，不依赖旧版 UC。"""
+    """以普通 Chrome 启动，再附加 WebDriver，避免 UAAAP 白屏。"""
     if not browser_path or not driver_path:
         raise RuntimeError("Windows Chrome 启动缺少浏览器或 chromedriver 路径。")
+
+    def free_local_port():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    global WINDOWS_CAPTURE_CHROME, WINDOWS_CAPTURE_PROFILE
+    profile_root = os.path.join(
+        os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(),
+        "SWUScheduleExport", "chrome-profiles")
+    os.makedirs(profile_root, exist_ok=True)
+    WINDOWS_CAPTURE_PROFILE = tempfile.mkdtemp(prefix="capture-", dir=profile_root)
+    debug_port = free_local_port()
+    command = [
+        browser_path,
+        f"--remote-debugging-port={debug_port}",
+        f"--user-data-dir={WINDOWS_CAPTURE_PROFILE}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--no-proxy-server",
+        "--proxy-bypass-list=*",
+        "--start-maximized",
+    ]
+    log("正在以普通 Chrome 启动统一认证窗口 ...", "INFO")
+    WINDOWS_CAPTURE_CHROME = subprocess.Popen(
+        command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+    deadline = time.time() + 20
+    endpoint = f"http://127.0.0.1:{debug_port}/json/version"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(endpoint, timeout=2) as response:
+                if response.status == 200:
+                    break
+        except Exception:
+            if WINDOWS_CAPTURE_CHROME.poll() is not None:
+                raise RuntimeError("普通 Chrome 启动后意外退出。")
+            time.sleep(0.25)
+    else:
+        raise TimeoutError("普通 Chrome 在 20 秒内未开放自动化连接端口。")
+
     options = webdriver.ChromeOptions()
-    options.binary_location = browser_path
-    options.add_argument("--disable-popup-blocking")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--no-proxy-server")
-    options.add_argument("--proxy-bypass-list=*")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--start-maximized")
-    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-    options.add_experimental_option("useAutomationExtension", False)
+    options.debugger_address = f"127.0.0.1:{debug_port}"
 
     def launch():
         driver = webdriver.Chrome(service=Service(driver_path), options=options)
-        # 必须在打开统一认证页前注入，避免 UAAAP 因 webdriver 标记进入空白异常页。
+        # 在首个受控页面打开前消除 webdriver 暴露，附加模式不会添加 enable-automation 开关。
         try:
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
                 "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
@@ -484,10 +526,10 @@ def start_windows_chrome(browser_path, driver_path):
             pass
         return driver
 
-    # 同版本 browser + chromedriver 均由本项目准备；连接过程带心跳与 45 秒上限。
+    # Chrome 本身不由 chromedriver 启动；driver 只在本地端口附加，连接过程有心跳和上限。
     return start_driver_with_watchdog(
         launch,
-        "Selenium（Windows Chrome）",
+        "Selenium（附加普通 Windows Chrome）",
         timeout=45,
     )
 
@@ -1333,6 +1375,7 @@ def write_captured(html, meta):
 
 # ================= 主程序 =================
 def main():
+    global WINDOWS_CAPTURE_CHROME, WINDOWS_CAPTURE_PROFILE
     print("=" * 56)
     print("   📅  西南大学课程表自动抓取器")
     print("=" * 56)
@@ -1457,10 +1500,29 @@ def main():
                 input("  按【回车】关闭抓取用 Chrome（应用页面不受影响）...")
             except (EOFError, KeyboardInterrupt):
                 pass
+            if IS_WIN:
+                try:
+                    # 附加模式下 quit 只会断开驱动；显式关闭本程序创建的普通 Chrome。
+                    driver.execute_cdp_cmd("Browser.close", {})
+                except Exception:
+                    pass
             try:
                 driver.quit()
             except Exception:
                 pass
+        if IS_WIN:
+            if WINDOWS_CAPTURE_CHROME and WINDOWS_CAPTURE_CHROME.poll() is None:
+                try:
+                    WINDOWS_CAPTURE_CHROME.terminate()
+                except Exception:
+                    pass
+            if WINDOWS_CAPTURE_PROFILE:
+                try:
+                    shutil.rmtree(WINDOWS_CAPTURE_PROFILE, ignore_errors=True)
+                except Exception:
+                    pass
+            WINDOWS_CAPTURE_CHROME = None
+            WINDOWS_CAPTURE_PROFILE = None
 
 
 if __name__ == "__main__":

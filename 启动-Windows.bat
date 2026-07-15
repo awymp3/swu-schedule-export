@@ -165,30 +165,39 @@ if errorlevel 1 (
   echo [ERROR] Could not enable site-packages for the local Python runtime.
   exit /b 1
 )
-set "GET_PIP=%RUNTIME_DIR%\get-pip.py"
+set "PIP_WHEEL=%RUNTIME_DIR%\pip-bootstrap.whl"
 echo Installing pip for the project-local Python runtime...
-echo This first-time setup may take a few minutes. Download progress is shown below.
-call :download_file "https://bootstrap.pypa.io/get-pip.py" "%GET_PIP%"
+echo Fetching the pip package directly from the Tsinghua mirror...
+call :download_pip_wheel "%PIP_TUNA%" "%PIP_WHEEL%"
 if errorlevel 1 (
-  echo [ERROR] Could not download the pip bootstrap script.
+  echo Tsinghua mirror failed. Retrying with the Aliyun mirror...
+  call :download_pip_wheel "%PIP_ALIYUN%" "%PIP_WHEEL%"
+)
+if errorlevel 1 (
+  echo [ERROR] Could not download the pip package from a China mirror.
   exit /b 1
 )
-"%LOCAL_PY%" "%GET_PIP%" --no-warn-script-location --disable-pip-version-check --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_TUNA%"
+
+echo Installing pip from the downloaded package...
+mkdir "%PYTHON_DIR%\Lib\site-packages" >nul 2>&1
+"%LOCAL_PY%" -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "%PIP_WHEEL%" "%PYTHON_DIR%\Lib\site-packages"
 if errorlevel 1 (
-  echo Tsinghua mirror failed while installing pip. Retrying with the Aliyun mirror...
-  "%LOCAL_PY%" "%GET_PIP%" --no-warn-script-location --disable-pip-version-check --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_ALIYUN%"
-)
-if errorlevel 1 (
-  echo [ERROR] pip could not be installed for the project-local Python runtime.
+  echo [ERROR] The downloaded pip package could not be installed.
   exit /b 1
 )
-del /q "%GET_PIP%" >nul 2>&1
+del /q "%PIP_WHEEL%" >nul 2>&1
 "%LOCAL_PY%" -m pip --version >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] pip was installed but cannot be started.
   exit /b 1
 )
 exit /b 0
+
+:download_pip_wheel
+set "PIP_INDEX=%~1"
+set "PIP_WHEEL=%~2"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='Continue'; try { $base = ('{0}/simple/pip/' -f $env:PIP_INDEX.TrimEnd('/')); Write-Host ('Reading package index: ' + $base); $page = Invoke-WebRequest -UseBasicParsing -Uri $base -TimeoutSec 30 -ErrorAction Stop; $items = foreach ($match in [regex]::Matches($page.Content, 'href\s*=\s*[\x27\x22](?<url>[^\x27\x22]*pip-(?<version>\d+(?:\.\d+)+)-py3-none-any\.whl)[^\x27\x22]*[\x27\x22]', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { [pscustomobject]@{ Version = [version]$match.Groups['version'].Value; Url = [System.Net.WebUtility]::HtmlDecode($match.Groups['url'].Value) } }; $item = $items | Sort-Object Version -Descending | Select-Object -First 1; if ($null -eq $item) { throw 'No compatible pip wheel was found on this mirror.' }; $url = [Uri]::new([Uri]$base, $item.Url).GetLeftPart([System.UriPartial]::Path); Write-Host ('Downloading pip ' + $item.Version + ' from the mirror...'); Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $env:PIP_WHEEL -TimeoutSec 60 -ErrorAction Stop; exit 0 } catch { Write-Host ('[DETAIL] ' + $_.Exception.Message); exit 1 }"
+exit /b %ERRORLEVEL%
 
 :download_file
 set "DOWNLOAD_URL=%~1"

@@ -75,6 +75,8 @@ CFT_MIRROR = "https://registry.npmmirror.com/-/binary/chrome-for-testing"
 CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
 # 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
 CFT_FALLBACK_VERSION = "152.0.7951.0"
+# 每次 Windows 启动都会打印，用来确认没有误运行旧下载包中的脚本。
+BUILD_TAG = "2026.07.15-windows-browser-3"
 
 # [代理] 自动探测：用真实 HTTP 请求验证代理是否可用，否则直连
 PROXY = "127.0.0.1:7897"
@@ -1193,6 +1195,7 @@ def main():
     print("=" * 56)
     print("   📅  西南大学课程表自动抓取器")
     print("=" * 56)
+    log(f"构建版本：{BUILD_TAG}", "SYSTEM")
 
     # 1) 账号（本地已存则免输入，否则显示登录窗口）
     if not resolve_account():

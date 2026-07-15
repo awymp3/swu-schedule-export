@@ -8,10 +8,10 @@ cd "$ROOT" || exit 1
 echo "============================================"
 echo "   课程表助手 · 全自动抓取"
 echo "============================================"
-echo "   构建版本：2026.07.15-browser-12"
+echo "   发布版本：v1.0.0 / 构建：2026.07.15-browser-12"
 echo "   Copyright (c) 2026 Jiapeng Lee"
 echo "   GitHub: https://github.com/awymp3/swu-schedule-export"
-echo "   Email: wadrqhh@gmail.com"
+echo "   Email: awymp3@gmail.com"
 echo
 
 RUNTIME_DIR="$ROOT/.runtime"

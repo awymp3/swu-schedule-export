@@ -9,10 +9,10 @@ cd /d "%ROOT%"
 echo ============================================
 echo    Schedule Helper - Automatic Capture
 echo ============================================
-echo    Build: 2026.07.15-browser-12
+echo    Release: v1.0.0 / Build: 2026.07.15-browser-12
 echo    Copyright (c) 2026 Jiapeng Lee
 echo    GitHub: https://github.com/awymp3/swu-schedule-export
-echo    Email: wadrqhh@gmail.com
+echo    Email: awymp3@gmail.com
 echo.
 
 REM China-friendly sources: TUNA first, then Aliyun, then official PyPI.

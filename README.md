@@ -8,7 +8,21 @@
 
 ## 项目与联系
 
-Copyright © 2026 Jiapeng Lee。项目主页：[awymp3/swu-schedule-export](https://github.com/awymp3/swu-schedule-export)。问题反馈或建议可发送至 [wadrqhh@gmail.com](mailto:wadrqhh@gmail.com)。
+Copyright © 2026 Jiapeng Lee。项目主页：[awymp3/swu-schedule-export](https://github.com/awymp3/swu-schedule-export)。问题反馈或建议可发送至 [awymp3@gmail.com](mailto:awymp3@gmail.com)。
+
+## 版本与发布
+
+当前首个正式发布版本为 **v1.0.0**，对应构建编号 **2026.07.15-browser-12**。启动时显示的版本与发布页中的版本保持一致；完整信息也写在包内的 [`VERSION`](VERSION) 文件中。
+
+在 [Releases](https://github.com/awymp3/swu-schedule-export/releases) 页面可下载以下六个独立运行包。每个包都包含通用程序文件、许可证和说明文档，但只包含对应操作系统的启动文件，不包含账号、已抓取课表、浏览器或本地 Python 运行时。
+
+| 平台 | ZIP 包 | TAR.GZ 包 | 启动文件 |
+|---|---|---|---|
+| Windows | `swu-schedule-export-v1.0.0-windows.zip` | `swu-schedule-export-v1.0.0-windows.tar.gz` | `启动-Windows.bat` |
+| macOS | `swu-schedule-export-v1.0.0-macos.zip` | `swu-schedule-export-v1.0.0-macos.tar.gz` | `启动-Mac.command` |
+| Linux | `swu-schedule-export-v1.0.0-linux.zip` | `swu-schedule-export-v1.0.0-linux.tar.gz` | `启动-Linux.sh` |
+
+Windows 一般选择 `.zip`；macOS 和 Linux 一般选择 `.tar.gz`。同一平台的两种压缩格式内容相同，只是为了适配不同的解压工具。下载后解压一次即可运行，不要把多个平台包混在同一个目录中。
 
 ## 使用前说明
 
@@ -35,6 +49,15 @@ chmod +x 启动-Mac.command
 双击 `启动-Windows.bat`。
 
 脚本会优先使用已安装的 Python 3；未检测到时会下载项目本地运行时并继续执行。
+
+### Linux
+
+在终端进入解压后的目录后执行：
+
+```bash
+chmod +x 启动-Linux.sh
+./启动-Linux.sh
+```
 
 ### 运行流程
 
@@ -90,7 +113,7 @@ chmod +x 启动-Mac.command
 
 | 文件或目录 | 用途 |
 |---|---|
-| `启动-Mac.command` / `启动-Windows.bat` | macOS、Windows 启动脚本 |
+| `启动-Mac.command` / `启动-Windows.bat` / `启动-Linux.sh` | 对应平台的启动脚本；发布包只带其中一个 |
 | `capture_auto.py` | 登录、选择学年学期并抓取课表 |
 | `capture.py` | 手动登录后抓取课表的备用脚本 |
 | `index.html` | 课表预览与 `.ics` 导出页面 |
@@ -100,6 +123,7 @@ chmod +x 启动-Mac.command
 | `captured.js` | 最近一次抓取的课表数据，可删除 |
 | `SECURITY.md` | 统一身份认证信息、数据和安全使用说明 |
 | `THIRD_PARTY_NOTICES.md` | 运行时第三方组件及许可证说明 |
+| `VERSION` | 发布版本、构建编号和发布日期 |
 
 ## 开源许可
 

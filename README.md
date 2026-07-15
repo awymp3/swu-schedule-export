@@ -13,7 +13,7 @@ Copyright © 2026 Jiapeng Lee。项目主页：[awymp3/swu-schedule-export](http
 ## 使用前说明
 
 - 抓取课表时，需要连接西南大学校园网，或处于能够正常访问西南大学教务系统的校内网络环境。
-- 首次运行需要联网下载浏览器驱动和 Python 依赖。若电脑没有可用的 Python 3，Windows 和 macOS 启动脚本会将运行时下载到项目目录的 `.runtime` 中，不会修改系统 PATH。Windows 未安装 Chrome 时，会下载完整的 Chrome for Testing 到 `browsers/`，不会下载无头浏览器。
+- 首次运行需要联网下载浏览器驱动和 Python 依赖。若电脑没有可用的 Python 3，macOS 会将运行时下载到项目目录的 `.runtime` 中；Windows 会将运行时下载到 `%LOCALAPPDATA%\SWUScheduleExport\runtime` 的短路径中，以避免 Windows 的长路径限制。两者都不会修改系统 PATH。Windows 未安装 Chrome 时，会下载完整的 Chrome for Testing 到 `browsers/`，不会下载无头浏览器。
 - 下载默认适配国内网络：依赖（包括 `ddddocr`）优先使用清华 PyPI 镜像，其次阿里云镜像；Windows 的本地 Python 使用阿里云 Python 镜像，macOS 的本地运行时优先使用可访问的 GitHub 发布镜像。镜像不可用时才回退官方源。
 - 西南大学统一身份认证账号和密码只保存在项目目录的 `.env` 文件中，不会上传。该文件已被 Git 忽略，不应分享给其他人。
 

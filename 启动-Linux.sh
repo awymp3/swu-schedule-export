@@ -6,7 +6,7 @@ cd "$(dirname "$0")" || exit 1
 echo "============================================"
 echo "   📅 课程表助手 · 全自动抓取"
 echo "============================================"
-echo "   构建版本：2026.07.15-browser-6"
+echo "   构建版本：2026.07.15-browser-7"
 echo "   Copyright (c) 2026 Jiapeng Lee"
 echo "   GitHub: https://github.com/awymp3/swu-schedule-export"
 echo "   Email: wadrqhh@gmail.com"

@@ -9,7 +9,7 @@ cd /d "%ROOT%"
 echo ============================================
 echo    Schedule Helper - Automatic Capture
 echo ============================================
-echo    Build: 2026.07.15-browser-6
+echo    Build: 2026.07.15-browser-7
 echo    Copyright (c) 2026 Jiapeng Lee
 echo    GitHub: https://github.com/awymp3/swu-schedule-export
 echo    Email: wadrqhh@gmail.com
@@ -111,7 +111,11 @@ pause
 exit /b 1
 
 :install_local_python
-set "RUNTIME_DIR=%ROOT%.runtime"
+REM Keep Python packages under a short per-user path. ddddocr installs onnxruntime,
+REM whose generated module paths exceed the legacy 260-character limit in deep ZIP folders.
+set "RUNTIME_BASE=%LOCALAPPDATA%\SWUScheduleExport"
+if "%LOCALAPPDATA%"=="" set "RUNTIME_BASE=%TEMP%\SWUScheduleExport"
+set "RUNTIME_DIR=%RUNTIME_BASE%\runtime"
 set "PYTHON_DIR=%RUNTIME_DIR%\python"
 set "LOCAL_PY=%PYTHON_DIR%\python.exe"
 call :local_runtime_is_usable
@@ -119,6 +123,7 @@ if not errorlevel 1 exit /b 0
 set "LOCAL_PY="
 
 mkdir "%RUNTIME_DIR%" >nul 2>&1
+echo Local runtime path: %RUNTIME_DIR%
 echo Python 3 was not found. Downloading a local runtime from the Aliyun mirror...
 
 set "PYTHON_ARCH=amd64"

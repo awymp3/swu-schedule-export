@@ -23,6 +23,7 @@ import time
 import json
 import re
 import zipfile
+import base64
 import subprocess
 import platform
 import webbrowser
@@ -66,6 +67,11 @@ CAPTURED_JS = os.path.join(HERE, "captured.js")
 ENV_FILE = os.path.join(HERE, ".env")                # 本地保存统一身份认证信息（首次输入后）
 LEGACY_ACCOUNT_FILE = os.path.join(HERE, "account.json")
 DRIVER_DIR = os.path.join(HERE, "drivers")          # 各平台 chromedriver 缓存目录
+BROWSER_DIR = os.path.join(HERE, "browsers")         # 未安装 Chrome 时的便携浏览器缓存目录
+CFT_MIRROR = "https://registry.npmmirror.com/-/binary/chrome-for-testing"
+CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
+# 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
+CFT_FALLBACK_VERSION = "152.0.7951.0"
 
 # [代理] 自动探测：用真实 HTTP 请求验证代理是否可用，否则直连
 PROXY = "127.0.0.1:7897"
@@ -162,34 +168,57 @@ class MacFixPatcher(uc.Patcher):
 uc.Patcher = MacFixPatcher
 
 
-def detect_chrome_version():
-    """检测本机 Chrome 主版本号。失败返回 None（让 uc 自行处理）。"""
-    sysname = platform.system().lower()
+def _chrome_major(executable):
+    """读取 Chrome 可执行文件版本，失败返回 None。"""
+    if not executable or (os.path.sep in executable and not os.path.exists(executable)):
+        return None
     try:
-        if "darwin" in sysname:
-            out = subprocess.check_output(
-                ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--version"],
-                stderr=subprocess.DEVNULL).decode()
-        elif "windows" in sysname:
-            # 注册表查 Chrome 版本
-            out = subprocess.check_output(
-                'reg query "HKEY_CURRENT_USER\\Software\\Google\\Chrome\\BLBeacon" /v version',
-                shell=True, stderr=subprocess.DEVNULL).decode()
-        else:
-            for exe in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
-                try:
-                    out = subprocess.check_output([exe, "--version"],
-                                                  stderr=subprocess.DEVNULL).decode()
-                    break
-                except Exception:
-                    continue
-            else:
-                return None
-        import re
+        out = subprocess.check_output([executable, "--version"],
+                                      stderr=subprocess.DEVNULL).decode(errors="ignore")
         m = re.search(r"(\d+)\.\d+\.\d+", out)
         return int(m.group(1)) if m else None
     except Exception:
         return None
+
+
+def find_chrome_executable():
+    """查找本机完整 Chrome；Windows 同时检查常见安装目录和注册表。"""
+    sysname = platform.system().lower()
+    if "darwin" in sysname:
+        path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        return path if os.path.exists(path) else None
+    if "windows" in sysname:
+        candidates = []
+        for variable in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+            base = os.environ.get(variable)
+            if base:
+                candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+        for key in (r"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                    r"HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"):
+            try:
+                out = subprocess.check_output(f'reg query "{key}" /ve', shell=True,
+                                              stderr=subprocess.DEVNULL).decode(errors="ignore")
+                match = re.search(r"REG_SZ\s+(.+chrome\.exe)", out, re.IGNORECASE)
+                if match:
+                    candidates.append(match.group(1).strip())
+            except Exception:
+                pass
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        return None
+    for executable in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        try:
+            subprocess.check_output([executable, "--version"], stderr=subprocess.DEVNULL)
+            return executable
+        except Exception:
+            continue
+    return None
+
+
+def detect_chrome_version(executable=None):
+    """检测本机 Chrome 主版本号；未指定路径时自动查找。"""
+    return _chrome_major(executable or find_chrome_executable())
 
 
 def platform_tag():
@@ -205,10 +234,9 @@ def platform_tag():
 
 def _mirror_versions():
     """从淘宝镜像列出全部可用版本（用于挑选最接近的）。"""
-    url = "https://registry.npmmirror.com/-/binary/chrome-for-testing/"
+    url = f"{CFT_MIRROR}/"
     try:
         data = urllib.request.urlopen(url, timeout=15).read().decode()
-        import re
         return re.findall(r'"name":"(\d+\.\d+\.\d+\.\d+)/"', data)
     except Exception:
         return []
@@ -223,26 +251,86 @@ def _pick_version(major):
     return vers[-1]
 
 
-def download_driver(major):
+def _latest_mirror_version():
+    """取镜像中版本号最高的 Chrome for Testing 版本。"""
+    versions = _mirror_versions()
+    if not versions:
+        return None
+    return max(versions, key=lambda v: [int(x) for x in v.split(".")])
+
+
+def _download_with_progress(url, target, label):
+    """下载到临时文件后原子替换，并在终端显示实际字节进度。"""
+    temporary = target + ".part"
+    downloaded = 0
+    last_draw = 0.0
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=30) as response, open(temporary, "wb") as out:
+            total = int(response.headers.get("Content-Length") or 0)
+            while True:
+                chunk = response.read(1024 * 256)
+                if not chunk:
+                    break
+                out.write(chunk)
+                downloaded += len(chunk)
+                now = time.time()
+                if now - last_draw >= 0.12 or (total and downloaded >= total):
+                    if total:
+                        percent = min(100, downloaded * 100 // total)
+                        filled = percent * 24 // 100
+                        bar = "#" * filled + "-" * (24 - filled)
+                        text = f"  {label}: [{bar}] {percent:3d}% ({downloaded / 1024 / 1024:.1f}/{total / 1024 / 1024:.1f} MB)"
+                    else:
+                        text = f"  {label}: {downloaded / 1024 / 1024:.1f} MB"
+                    print("\r" + text, end="", flush=True)
+                    last_draw = now
+        if downloaded < 1:
+            raise RuntimeError("下载文件为空")
+        os.replace(temporary, target)
+        print()
+        return downloaded
+    except Exception:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _download_cft(relative_path, target, label):
+    """优先 npmmirror，失败后回退 Chrome 官方源，并记录每个真实地址。"""
+    errors = []
+    for name, base in (("npmmirror", CFT_MIRROR), ("Chrome 官方源", CFT_OFFICIAL)):
+        url = f"{base}/{relative_path}"
+        log(f"{label}：从{name}下载", "INFO")
+        log(f"下载地址：{url}", "INFO")
+        try:
+            size = _download_with_progress(url, target, label)
+            log(f"{label} 下载完成（{size / 1024 / 1024:.1f} MB）", "SUCCESS")
+            return True
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+            log(f"{name} 下载失败：{exc}", "WARN")
+    log(f"{label} 无法下载；" + "；".join(errors), "ERROR")
+    return False
+
+
+def download_driver(major, full=None):
     """下载匹配本机平台与 Chrome 版本的 chromedriver，返回可执行路径。"""
     tag, exe_name = platform_tag()
     os.makedirs(DRIVER_DIR, exist_ok=True)
-    dest = os.path.join(DRIVER_DIR, f"{tag}-{major}-{exe_name}")
-    if os.path.exists(dest) and os.path.getsize(dest) > 1_000_000:
-        return dest  # 已缓存
-
-    full = _pick_version(major)
+    full = full or _pick_version(major)
     if not full:
         log(f"镜像上未找到 Chrome {major} 对应的 driver", "WARN")
         return None
-    url = (f"https://registry.npmmirror.com/-/binary/chrome-for-testing/"
-           f"{full}/{tag}/chromedriver-{tag}.zip")
+    # 用完整版本名缓存，避免同一主版本升级后误复用不匹配的 driver。
+    dest = os.path.join(DRIVER_DIR, f"{tag}-{full}-{exe_name}")
+    if os.path.exists(dest) and os.path.getsize(dest) > 1_000_000:
+        return dest
     log(f"下载 chromedriver {full} ({tag}) ...", "INFO")
     zip_path = os.path.join(DRIVER_DIR, "cd.zip")
-    try:
-        urllib.request.urlretrieve(url, zip_path)
-    except Exception as e:
-        log(f"下载失败: {e}", "ERROR")
+    if not _download_cft(f"{full}/{tag}/chromedriver-{tag}.zip", zip_path, "chromedriver"):
         return None
 
     # 解压，取出 chromedriver 可执行文件（排除 LICENSE.chromedriver 等同后缀文件）
@@ -268,9 +356,9 @@ def download_driver(major):
     return dest
 
 
-def prepare_driver(major):
+def prepare_driver(major, full=None):
     """下载（或复用缓存）+ Mac 去隔离签名，返回可用的 driver 路径；失败返回 None。"""
-    path = download_driver(major)
+    path = download_driver(major, full)
     if not path:
         return None
     if IS_MAC:
@@ -278,6 +366,49 @@ def prepare_driver(major):
         subprocess.run(f"codesign --force --deep --sign - '{path}'",
                        shell=True, capture_output=True)
     return path
+
+
+def download_portable_chrome():
+    """Windows 未安装 Chrome 时下载完整 Chrome for Testing，返回 (路径, 完整版本)。"""
+    if not IS_WIN:
+        return None, None
+    tag, _ = platform_tag()
+    os.makedirs(BROWSER_DIR, exist_ok=True)
+
+    # 先复用之前已经完整解压的浏览器，避免重复下载 100MB 以上的文件。
+    for name in sorted(os.listdir(BROWSER_DIR), reverse=True):
+        candidate = os.path.join(BROWSER_DIR, name, f"chrome-{tag}", "chrome.exe")
+        if os.path.isfile(candidate) and os.path.getsize(candidate) > 100_000:
+            version = name.rsplit("-", 1)[-1]
+            log(f"复用已下载的 Chrome for Testing（版本 {version}）", "SUCCESS")
+            return candidate, version
+
+    full = _latest_mirror_version()
+    if not full:
+        full = CFT_FALLBACK_VERSION
+        log(f"无法读取版本列表，改用已验证的 Chrome for Testing {full}", "WARN")
+    target_dir = os.path.join(BROWSER_DIR, f"{tag}-{full}")
+    executable = os.path.join(target_dir, f"chrome-{tag}", "chrome.exe")
+    zip_path = os.path.join(BROWSER_DIR, "chrome-for-testing.zip")
+    log("未检测到本机 Chrome，准备下载完整 Chrome for Testing（非无头浏览器）", "WARN")
+    if not _download_cft(f"{full}/{tag}/chrome-{tag}.zip", zip_path, "Chrome 浏览器"):
+        return None, None
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            archive.extractall(target_dir)
+    except Exception as exc:
+        log(f"Chrome 浏览器解压失败：{exc}", "ERROR")
+        return None, None
+    finally:
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+    if not os.path.isfile(executable):
+        log(f"解压后未找到 Chrome：{executable}", "ERROR")
+        return None, None
+    log("Chrome 浏览器准备完成", "SUCCESS")
+    return executable, full
 
 
 # ================= 统一身份认证信息管理 =================
@@ -383,9 +514,104 @@ def save_account(username, password):
         log(f"登录信息保存失败: {e}", "WARN")
 
 
+def prompt_account_windows_gui():
+    """使用 Windows 自带 WPF 显示登录窗口；不可用时返回 None 供其他方案兜底。"""
+    script = r'''
+$ErrorActionPreference = 'Stop'
+try {
+    Add-Type -AssemblyName PresentationFramework
+    [xml]$xaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="西南大学课程表导出" Width="500" Height="440" ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen" Background="#F3F6FB" FontFamily="Microsoft YaHei UI">
+  <Grid Margin="24">
+    <Border Background="White" CornerRadius="18" Padding="30">
+      <StackPanel>
+        <Border Background="#EAF2FF" CornerRadius="12" Padding="12" Margin="0,0,0,16">
+          <TextBlock Text="SWU 课程表" Foreground="#1458B8" FontSize="16" FontWeight="SemiBold"/>
+        </Border>
+        <TextBlock Text="西南大学统一身份认证" FontSize="23" FontWeight="SemiBold" Foreground="#172033"/>
+        <TextBlock Text="登录信息仅保存在本机 .env 文件中，用于自动登录教务系统。" Margin="0,7,0,22" TextWrapping="Wrap" Foreground="#667085" FontSize="13"/>
+        <TextBlock Text="统一认证账号" Foreground="#344054" FontWeight="SemiBold" Margin="0,0,0,6"/>
+        <TextBox x:Name="UsernameBox" Height="40" Padding="11,0" FontSize="14" BorderBrush="#CBD5E1"/>
+        <TextBlock Text="密码" Foreground="#344054" FontWeight="SemiBold" Margin="0,16,0,6"/>
+        <PasswordBox x:Name="PasswordBox" Height="40" Padding="11,0" FontSize="14" BorderBrush="#CBD5E1"/>
+        <CheckBox x:Name="RememberBox" IsChecked="True" Content="记住登录信息（下次免输入）" Foreground="#475467" Margin="0,15,0,20"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button x:Name="CancelButton" Content="取消" Width="82" Height="38" Margin="0,0,10,0" Background="White" BorderBrush="#CBD5E1" Foreground="#344054"/>
+          <Button x:Name="LoginButton" Content="继续" Width="112" Height="38" Background="#1769E0" BorderThickness="0" Foreground="White" FontWeight="SemiBold"/>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>
+'@
+    $reader = New-Object System.Xml.XmlNodeReader $xaml
+    $window = [Windows.Markup.XamlReader]::Load($reader)
+    $usernameBox = $window.FindName('UsernameBox')
+    $passwordBox = $window.FindName('PasswordBox')
+    $rememberBox = $window.FindName('RememberBox')
+    $loginButton = $window.FindName('LoginButton')
+    $cancelButton = $window.FindName('CancelButton')
+    $script:result = $null
+    $submit = {
+        $username = $usernameBox.Text.Trim()
+        $password = $passwordBox.Password
+        if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($password)) {
+            [System.Windows.MessageBox]::Show('请填写统一身份认证账号和密码。', '提示', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $script:result = [pscustomobject]@{ username = $username; password = $password; remember = [bool]$rememberBox.IsChecked }
+        $window.DialogResult = $true
+        $window.Close()
+    }
+    $loginButton.Add_Click($submit)
+    $cancelButton.Add_Click({ $window.Close() })
+    $window.Add_KeyDown({ param($sender, $eventArgs) if ($eventArgs.Key -eq 'Enter') { & $submit } })
+    $usernameBox.Focus() | Out-Null
+    $window.ShowDialog() | Out-Null
+    if ($null -ne $script:result) {
+        $json = $script:result | ConvertTo-Json -Compress
+        [Console]::Out.WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))
+    }
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+'''
+    try:
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
+             "-EncodedCommand", encoded],
+            capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
+    except Exception as exc:
+        log(f"无法启动 Windows 登录窗口：{exc}", "WARN")
+        return None
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip().splitlines()
+        log(f"Windows 登录窗口不可用：{detail[-1] if detail else '未知错误'}", "WARN")
+        return None
+    payload = next((line.strip() for line in reversed(completed.stdout.splitlines()) if line.strip()), "")
+    if not payload:
+        return None, None, False  # 用户正常取消
+    try:
+        values = json.loads(base64.b64decode(payload).decode("utf-8"))
+        return values.get("username"), values.get("password"), bool(values.get("remember"))
+    except Exception:
+        log("Windows 登录窗口返回的数据无效，已改用备用输入方式", "WARN")
+        return None
+
+
 def prompt_account_gui():
     """弹出图形窗口让用户输入统一身份认证信息。返回 (username, password, remember)。
     无图形环境时回退到终端输入。"""
+    if IS_WIN:
+        result = prompt_account_windows_gui()
+        if result is not None:
+            return result
     try:
         import tkinter as tk
         from tkinter import messagebox, ttk
@@ -890,7 +1116,7 @@ def main():
     print("   📅  西南大学课程表自动抓取器")
     print("=" * 56)
 
-    # 1) 账号（本地已存则免输入，否则弹窗）
+    # 1) 账号（本地已存则免输入，否则显示登录窗口）
     if not resolve_account():
         return
 
@@ -902,13 +1128,24 @@ def main():
 
     driver = None
     try:
-        # 3) 检测 Chrome 版本 + 下载匹配的跨平台 driver
-        major = detect_chrome_version()
+        # 3) 检测完整 Chrome。Windows 没有安装 Chrome 时下载完整便携版，
+        #    并把路径显式交给 uc，避免其自行寻找/下载无头浏览器失败。
+        browser_path = find_chrome_executable()
+        portable_version = None
+        if not browser_path and IS_WIN:
+            browser_path, portable_version = download_portable_chrome()
+            if not browser_path:
+                raise RuntimeError("未检测到 Chrome，且完整 Chrome for Testing 下载失败。请检查网络后重试。")
+        major = detect_chrome_version(browser_path)
+        if not major and portable_version:
+            major = int(portable_version.split(".")[0])
         if major:
-            log(f"检测到 Chrome 主版本: {major}", "INFO")
+            log(f"使用 Chrome 主版本: {major}", "INFO")
         else:
-            log("未能检测 Chrome 版本，将让 uc 自行决定", "WARN")
-        driver_path = prepare_driver(major) if major else None
+            log("未能检测 Chrome 版本，将由 undetected-chromedriver 处理浏览器", "WARN")
+        driver_path = prepare_driver(major, portable_version) if major else None
+        if major and not driver_path:
+            raise RuntimeError("chromedriver 下载或解压失败，已停止以避免后台无提示下载。请检查上方下载日志后重试。")
 
         options = uc.ChromeOptions()
         options.add_argument("--disable-popup-blocking")
@@ -920,6 +1157,8 @@ def main():
             kw["version_main"] = major
         if driver_path:
             kw["driver_executable_path"] = driver_path
+        if browser_path:
+            kw["browser_executable_path"] = browser_path
         driver = uc.Chrome(**kw)
         driver.set_window_size(1100, 850)
 

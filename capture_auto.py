@@ -57,6 +57,8 @@ except ModuleNotFoundError:
 
 import undetected_chromedriver as uc
 import ddddocr
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -412,20 +414,20 @@ def download_portable_chrome():
     return executable, full
 
 
-def start_chrome_with_watchdog(options, kwargs, timeout=45):
-    """启动 Chrome 时显示心跳；uc 卡住时给出明确错误而非无限等待。"""
+def start_driver_with_watchdog(launcher, backend, timeout=45):
+    """启动 WebDriver 时显示心跳；连接卡住时给出明确错误而非无限等待。"""
     state = {"driver": None, "error": None}
     done = threading.Event()
 
     def launch():
         try:
-            state["driver"] = uc.Chrome(options=options, **kwargs)
+            state["driver"] = launcher()
         except BaseException as exc:
             state["error"] = exc
         finally:
             done.set()
 
-    log("正在启动 Chrome 并连接 WebDriver ...", "INFO")
+    log(f"正在通过 {backend} 启动 Chrome 并连接 WebDriver ...", "INFO")
     worker = threading.Thread(target=launch, name="chrome-startup", daemon=True)
     worker.start()
     started = time.time()
@@ -444,6 +446,29 @@ def start_chrome_with_watchdog(options, kwargs, timeout=45):
         raise state["error"]
     log("Chrome 已由 WebDriver 接管", "SUCCESS")
     return state["driver"]
+
+
+def start_chrome_with_watchdog(options, kwargs, timeout=45):
+    """macOS/Linux 保留 undetected-chromedriver 启动方式。"""
+    return start_driver_with_watchdog(
+        lambda: uc.Chrome(options=options, **kwargs), "undetected-chromedriver", timeout
+    )
+
+
+def start_windows_chrome(browser_path, driver_path):
+    """Windows 直接使用 Selenium 官方协议，绕过 UC 可能卡住的补丁启动过程。"""
+    if not browser_path or not driver_path:
+        raise RuntimeError("Windows 启动浏览器缺少项目 Chrome 或 chromedriver 路径。")
+    options = webdriver.ChromeOptions()
+    options.binary_location = browser_path
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    service = Service(executable_path=driver_path)
+    return start_driver_with_watchdog(
+        lambda: webdriver.Chrome(service=service, options=options), "Selenium 官方驱动", 30
+    )
 
 
 # ================= 统一身份认证信息管理 =================
@@ -1186,21 +1211,24 @@ def main():
         if major and not driver_path:
             raise RuntimeError("chromedriver 下载或解压失败，已停止以避免后台无提示下载。请检查上方下载日志后重试。")
 
-        options = uc.ChromeOptions()
-        options.add_argument("--disable-popup-blocking")
-        options.add_argument("--no-first-run")
-        options.add_argument("--no-default-browser-check")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-
-        kw = {}
-        if major:
-            kw["version_main"] = major
-        if driver_path:
-            kw["driver_executable_path"] = driver_path
-        if browser_path:
-            kw["browser_executable_path"] = browser_path
-        driver = start_chrome_with_watchdog(options, kw)
+        if IS_WIN:
+            log("Windows 使用 Selenium 官方驱动连接项目专用 Chrome ...", "INFO")
+            driver = start_windows_chrome(browser_path, driver_path)
+        else:
+            options = uc.ChromeOptions()
+            options.add_argument("--disable-popup-blocking")
+            options.add_argument("--no-first-run")
+            options.add_argument("--no-default-browser-check")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            kw = {}
+            if major:
+                kw["version_main"] = major
+            if driver_path:
+                kw["driver_executable_path"] = driver_path
+            if browser_path:
+                kw["browser_executable_path"] = browser_path
+            driver = start_chrome_with_watchdog(options, kw)
         driver.set_page_load_timeout(45)
         driver.set_script_timeout(30)
         driver.set_window_size(1100, 850)

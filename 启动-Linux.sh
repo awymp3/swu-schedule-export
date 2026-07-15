@@ -16,17 +16,17 @@ fi
 echo "🔍 检查依赖..."
 NEED=""
 python3 -c "import setuptools" 2>/dev/null || NEED="$NEED setuptools"
-python3 -c "import undetected_chromedriver" 2>/dev/null || NEED="$NEED undetected-chromedriver"
+python3 -c "import setuptools, undetected_chromedriver as u; v=tuple(int(x) for x in u.__version__.split('.')[:3]); raise SystemExit(0 if v >= (3, 5, 5) else 1)" 2>/dev/null || NEED="$NEED undetected-chromedriver"
 python3 -c "import ddddocr" 2>/dev/null || NEED="$NEED ddddocr"
 python3 -c "import selenium" 2>/dev/null || NEED="$NEED selenium"
 python3 -c "import PIL" 2>/dev/null || NEED="$NEED pillow"
 if [ -n "$NEED" ]; then
   echo "📦 首次使用，正在安装依赖（清华镜像）：$NEED"
-  if ! pip3 install $NEED --prefer-binary --timeout 30 --retries 3 -i https://pypi.tuna.tsinghua.edu.cn/simple; then
+  if ! pip3 install $NEED --upgrade --prefer-binary --timeout 30 --retries 3 -i https://pypi.tuna.tsinghua.edu.cn/simple; then
     echo "⚠️ 清华镜像安装失败，改用阿里云镜像重试…"
-    if ! pip3 install $NEED --prefer-binary --timeout 30 --retries 3 -i https://mirrors.aliyun.com/pypi/simple/; then
+    if ! pip3 install $NEED --upgrade --prefer-binary --timeout 30 --retries 3 -i https://mirrors.aliyun.com/pypi/simple/; then
       echo "⚠️ 阿里云镜像安装失败，改用官方 PyPI 重试…"
-      pip3 install $NEED --prefer-binary --timeout 30 --retries 3 || exit 1
+      pip3 install $NEED --upgrade --prefer-binary --timeout 30 --retries 3 || exit 1
     fi
   fi
 fi

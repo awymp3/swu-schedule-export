@@ -28,6 +28,7 @@ import subprocess
 import platform
 import webbrowser
 import urllib.request
+import threading
 from html import unescape
 
 # 关闭 SSL 证书校验（避免本机缺少 CA 证书导致请求失败）
@@ -411,6 +412,40 @@ def download_portable_chrome():
     return executable, full
 
 
+def start_chrome_with_watchdog(options, kwargs, timeout=45):
+    """启动 Chrome 时显示心跳；uc 卡住时给出明确错误而非无限等待。"""
+    state = {"driver": None, "error": None}
+    done = threading.Event()
+
+    def launch():
+        try:
+            state["driver"] = uc.Chrome(options=options, **kwargs)
+        except BaseException as exc:
+            state["error"] = exc
+        finally:
+            done.set()
+
+    log("正在启动 Chrome 并连接 WebDriver ...", "INFO")
+    worker = threading.Thread(target=launch, name="chrome-startup", daemon=True)
+    worker.start()
+    started = time.time()
+    while not done.wait(0.2):
+        elapsed = int(time.time() - started)
+        print(f"\r  Chrome 已打开，正在等待 WebDriver 连接 ... {elapsed:02d}s", end="", flush=True)
+        if elapsed >= timeout:
+            print()
+            force_kill_chrome()
+            raise TimeoutError(
+                f"Chrome 已启动，但 WebDriver 在 {timeout} 秒内没有完成连接。"
+                "已关闭本次浏览器，请重新运行并查看上方浏览器/驱动下载日志。"
+            )
+    print()
+    if state["error"]:
+        raise state["error"]
+    log("Chrome 已由 WebDriver 接管", "SUCCESS")
+    return state["driver"]
+
+
 # ================= 统一身份认证信息管理 =================
 ENV_USER_KEY = "SWU_UNIFIED_ID_USERNAME"
 ENV_PASSWORD_KEY = "SWU_UNIFIED_ID_PASSWORD"
@@ -523,24 +558,24 @@ try {
     [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="西南大学课程表导出" Width="500" Height="440" ResizeMode="NoResize"
+        Title="西南大学课程表导出" Width="520" Height="530" ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen" Background="#F3F6FB" FontFamily="Microsoft YaHei UI">
   <Grid Margin="24">
     <Border Background="White" CornerRadius="18" Padding="30">
-      <StackPanel>
+      <StackPanel KeyboardNavigation.TabNavigation="Cycle">
         <Border Background="#EAF2FF" CornerRadius="12" Padding="12" Margin="0,0,0,16">
           <TextBlock Text="SWU 课程表" Foreground="#1458B8" FontSize="16" FontWeight="SemiBold"/>
         </Border>
         <TextBlock Text="西南大学统一身份认证" FontSize="23" FontWeight="SemiBold" Foreground="#172033"/>
         <TextBlock Text="登录信息仅保存在本机 .env 文件中，用于自动登录教务系统。" Margin="0,7,0,22" TextWrapping="Wrap" Foreground="#667085" FontSize="13"/>
-        <TextBlock Text="统一认证账号" Foreground="#344054" FontWeight="SemiBold" Margin="0,0,0,6"/>
-        <TextBox x:Name="UsernameBox" Height="40" Padding="11,0" FontSize="14" BorderBrush="#CBD5E1"/>
-        <TextBlock Text="密码" Foreground="#344054" FontWeight="SemiBold" Margin="0,16,0,6"/>
-        <PasswordBox x:Name="PasswordBox" Height="40" Padding="11,0" FontSize="14" BorderBrush="#CBD5E1"/>
+        <TextBlock Text="统一认证账号" Foreground="#344054" FontWeight="SemiBold" Margin="0,0,0,6" TextAlignment="Center"/>
+        <TextBox x:Name="UsernameBox" Height="42" Padding="11,0" FontSize="14" BorderBrush="#CBD5E1" TextAlignment="Center" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
+        <TextBlock Text="密码" Foreground="#344054" FontWeight="SemiBold" Margin="0,16,0,6" TextAlignment="Center"/>
+        <PasswordBox x:Name="PasswordBox" Height="42" Padding="11,0" FontSize="14" BorderBrush="#CBD5E1" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
         <CheckBox x:Name="RememberBox" IsChecked="True" Content="记住登录信息（下次免输入）" Foreground="#475467" Margin="0,15,0,20"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-          <Button x:Name="CancelButton" Content="取消" Width="82" Height="38" Margin="0,0,10,0" Background="White" BorderBrush="#CBD5E1" Foreground="#344054"/>
-          <Button x:Name="LoginButton" Content="继续" Width="112" Height="38" Background="#1769E0" BorderThickness="0" Foreground="White" FontWeight="SemiBold"/>
+          <Button x:Name="CancelButton" Content="取消" Width="82" Height="38" Margin="0,0,10,0" Background="White" BorderBrush="#CBD5E1" Foreground="#344054" IsCancel="True"/>
+          <Button x:Name="LoginButton" Content="保存并继续" Width="112" Height="38" Background="#1769E0" BorderThickness="0" Foreground="White" FontWeight="SemiBold" IsDefault="True"/>
         </StackPanel>
       </StackPanel>
     </Border>
@@ -765,7 +800,9 @@ def get_captcha(driver):
 def login_procedure(driver):
     wait = WebDriverWait(driver, 15)
     try:
+        log("正在打开统一身份认证页面 ...", "INFO")
         driver.get(URL_START)
+        log("统一身份认证页面已载入，正在填写登录信息 ...", "INFO")
         time.sleep(3)
 
         # 有些入口需要先点「登录」div
@@ -1149,17 +1186,21 @@ def main():
 
         options = uc.ChromeOptions()
         options.add_argument("--disable-popup-blocking")
+        options.add_argument("--no-first-run")
+        options.add_argument("--no-default-browser-check")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
 
-        kw = {"options": options}
+        kw = {}
         if major:
             kw["version_main"] = major
         if driver_path:
             kw["driver_executable_path"] = driver_path
         if browser_path:
             kw["browser_executable_path"] = browser_path
-        driver = uc.Chrome(**kw)
+        driver = start_chrome_with_watchdog(options, kw)
+        driver.set_page_load_timeout(45)
+        driver.set_script_timeout(30)
         driver.set_window_size(1100, 850)
 
         # 登录（最多 3 次）

@@ -62,21 +62,21 @@ if errorlevel 1 (
 echo Checking dependencies...
 set "NEED="
 %PY% -c "import setuptools" >nul 2>&1 || set "NEED=%NEED% setuptools"
-%PY% -c "import undetected_chromedriver" >nul 2>&1 || set "NEED=%NEED% undetected-chromedriver"
+%PY% -c "import setuptools, undetected_chromedriver as u; v=tuple(int(x) for x in u.__version__.split('.')[:3]); raise SystemExit(0 if v >= (3, 5, 5) else 1)" >nul 2>&1 || set "NEED=%NEED% undetected-chromedriver"
 %PY% -c "import ddddocr" >nul 2>&1 || set "NEED=%NEED% ddddocr"
 %PY% -c "import selenium" >nul 2>&1 || set "NEED=%NEED% selenium"
 %PY% -c "import PIL" >nul 2>&1 || set "NEED=%NEED% pillow"
 
 if not "%NEED%"=="" (
   echo Installing required packages from the Tsinghua mirror:%NEED%
-  %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_TUNA%" %NEED%
+  %PY% -m pip install %PIP_SCOPE% --upgrade --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_TUNA%" %NEED%
   if errorlevel 1 (
     echo Tsinghua mirror failed. Retrying with the Aliyun mirror...
-    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_ALIYUN%" %NEED%
+    %PY% -m pip install %PIP_SCOPE% --upgrade --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_ALIYUN%" %NEED%
   )
   if errorlevel 1 (
     echo China mirrors failed. Retrying with the official PyPI source...
-    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 %NEED%
+    %PY% -m pip install %PIP_SCOPE% --upgrade --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 %NEED%
   )
   if errorlevel 1 (
     echo [ERROR] Dependencies could not be installed. Check your network, then retry.

@@ -698,8 +698,11 @@ def set_select_by_label(driver, element_id, wanted):
     });
     if (option) {
       el.value = option.value;
-      el.dispatchEvent(new Event('change', {bubbles: true}));
-      if (window.jQuery) window.jQuery(el).trigger('chosen:updated');
+      if (window.jQuery) {
+        window.jQuery(el).trigger('change').trigger('chosen:updated');
+      } else {
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+      }
       return {ok: true, value: option.value, text: (option.textContent || '').trim()};
     }
     // 有些正方页面只在 Chosen 视图中保留完整选项；先展开，再交给控件同步。
@@ -724,6 +727,23 @@ def set_select_by_label(driver, element_id, wanted):
     """, element_id, wanted)
 
 
+def wait_for_selected_timetable(driver, year_text, term_text, previous_title, timeout=12):
+    """等待 Ajax 查询完成，并确认标题已经切换到用户实际选择的学期。"""
+    deadline = time.time() + timeout
+    latest = {}
+    wanted_term = f"{term_text}学期" if term_text else ""
+    while time.time() < deadline:
+        latest = get_term_info(driver)
+        title = latest.get("timetableTitle", "")
+        if (title != previous_title and year_text and year_text in title and
+                (not wanted_term or wanted_term in title)):
+            return latest
+        time.sleep(0.5)
+    title = latest.get("timetableTitle", "")
+    log(f"查询后未确认课表标题切换（当前：{title or '未读取到'}）", "WARN")
+    return latest or get_term_info(driver)
+
+
 def choose_academic_term(driver):
     """让用户按需选择历史/未来学期；直接回车则保留页面当前学期。"""
     info = wait_for_term_options(driver)
@@ -735,6 +755,10 @@ def choose_academic_term(driver):
 
     original_year = year.get("value")
     original_term = term.get("value")
+    original_title = info.get("timetableTitle", "")
+    selected_year = {"value": original_year, "text": year.get("text", "")}
+    selected_term = {"value": original_term, "text": term.get("text", "")}
+    changed = False
     print("\n  选择要导出的课表（直接回车保留当前选择）：")
     print(f"  当前：{year.get('text') or '未选择'} 学年，第 {term.get('text') or '未选择'} 学期")
     print(f"  可选学年：{option_texts(year.get('options', []))}")
@@ -746,6 +770,9 @@ def choose_academic_term(driver):
                 log(f"学年“{wanted_year}”不可用，保留当前选择", "WARN")
             else:
                 log(f"已选择学年：{result['text']}", "SUCCESS")
+                selected_year = result
+                changed = (result.get("value") != original_year or
+                           result.get("text") != year.get("text"))
                 # 学期选项与学年关联，切换后等待页面重新填充，再读取一次。
                 info = wait_for_term_options(driver)
                 term = info.get("term") or {}
@@ -761,22 +788,28 @@ def choose_academic_term(driver):
                 log(f"学期“{wanted_term}”不可用，保留当前选择", "WARN")
             else:
                 log(f"已选择学期：第 {result['text']} 学期", "SUCCESS")
+                selected_term = result
+                changed = (changed or result.get("value") != original_term or
+                           result.get("text") != term.get("text"))
     except (EOFError, KeyboardInterrupt):
         print()
         log("未输入学年/学期，保留页面当前选择", "INFO")
         return get_term_info(driver)
 
-    updated = get_term_info(driver)
-    changed = ((updated.get("academicYear") or {}).get("value") != original_year or
-               (updated.get("term") or {}).get("value") != original_term)
     if changed:
         log("正在查询所选学年/学期的课表...", "INFO")
-        driver.execute_script("""
+        clicked = driver.execute_script("""
         var btn = document.getElementById('search_go');
-        if (btn) btn.click();
+        if (!btn) return false;
+        btn.click();
+        return true;
         """)
-        # 查询由正方页面以 Ajax 刷新；给表格和课程详情留出稳定时间。
-        time.sleep(3)
+        if not clicked:
+            log("未找到课表查询按钮，无法切换学期", "ERROR")
+            return get_term_info(driver)
+        return wait_for_selected_timetable(
+            driver, selected_year.get("text", ""), selected_term.get("text", ""), original_title
+        )
     return get_term_info(driver)
 
 

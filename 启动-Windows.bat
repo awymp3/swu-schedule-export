@@ -62,7 +62,7 @@ if errorlevel 1 (
 echo Checking dependencies...
 set "NEED="
 %PY% -c "import setuptools" >nul 2>&1 || set "NEED=%NEED% setuptools"
-%PY% -c "import setuptools, undetected_chromedriver as u; v=tuple(int(x) for x in u.__version__.split('.')[:3]); raise SystemExit(0 if v >= (3, 5, 5) else 1)" >nul 2>&1 || set "NEED=%NEED% undetected-chromedriver"
+%PY% -c "import setuptools, undetected_chromedriver" >nul 2>&1 || set "NEED=%NEED% undetected-chromedriver"
 %PY% -c "import ddddocr" >nul 2>&1 || set "NEED=%NEED% ddddocr"
 %PY% -c "import selenium" >nul 2>&1 || set "NEED=%NEED% selenium"
 %PY% -c "import PIL" >nul 2>&1 || set "NEED=%NEED% pillow"

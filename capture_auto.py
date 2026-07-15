@@ -78,8 +78,9 @@ CFT_FALLBACK_VERSION = "152.0.7951.0"
 # 每次启动都会打印，用来确认没有误运行旧下载包中的脚本。
 BUILD_TAG = "2026.07.15-browser-4"
 
-# [代理] 自动探测：用真实 HTTP 请求验证代理是否可用，否则直连
-PROXY = "127.0.0.1:7897"
+# 强制直连：不读取、不探测、也不使用系统或本地代理。
+# 教务系统、镜像下载和 chromedriver 本地通信均直接连接。
+FORCE_DIRECT_CONNECTION = True
 
 # [网址]（默认西南大学；其他学校改这两个网址即可）
 URL_START = "https://jw.swu.edu.cn/sso/zllogin"
@@ -97,31 +98,15 @@ USERNAME = ""
 PASSWORD = ""
 
 
-def _proxy_works(hostport):
-    proxy = f"http://{hostport}"
-    handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-    opener = urllib.request.build_opener(handler)
-    try:
-        req = urllib.request.Request(URL_START, headers={"User-Agent": "Mozilla/5.0"})
-        opener.open(req, timeout=4)
-        return True
-    except Exception:
-        return False
-
-
 def setup_proxy():
-    """探测并设置代理；本地连接不走代理。返回是否启用代理。"""
+    """清除继承的代理环境变量；当前版本强制直连。"""
     for k in ("http_proxy", "https_proxy", "all_proxy",
               "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
         os.environ.pop(k, None)
-    if _proxy_works(PROXY):
-        os.environ["http_proxy"] = f"http://{PROXY}"
-        os.environ["https_proxy"] = f"http://{PROXY}"
-        os.environ["all_proxy"] = f"socks5://{PROXY}"
-        # 本地 chromedriver 通信不走代理，否则 SSL EOF
-        os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
-        os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
-        return True
+    if FORCE_DIRECT_CONNECTION:
+        os.environ["no_proxy"] = "*"
+        os.environ["NO_PROXY"] = "*"
+        return False
     return False
 
 
@@ -1202,8 +1187,8 @@ def main():
         return
 
     # 2) 代理探测
-    proxy_on = setup_proxy()
-    log(f"网络模式: {'走代理 '+PROXY if proxy_on else '直连（未检测到代理）'}", "SYSTEM")
+    setup_proxy()
+    log("网络模式：强制直连（代理已禁用）", "SYSTEM")
 
     force_kill_chrome()
 

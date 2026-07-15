@@ -29,6 +29,9 @@ import platform
 import webbrowser
 import urllib.request
 import threading
+import socket
+import tempfile
+import shutil
 from html import unescape
 
 IS_MAC = platform.system().lower() == "darwin"
@@ -44,25 +47,35 @@ if not hasattr(_PILImage, "ANTIALIAS"):
     _PILImage.ANTIALIAS = _PILImage.LANCZOS
 
 import ddddocr
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# 普通 ChromeDriver / DevTools 附加模式会被 SWU 的统一认证识别，并在跳转后
-# 返回空白页。因此 Windows 与 macOS/Linux 一律使用 UC 3.5.5+ 的补丁驱动。
-# Python 3.12+ 移除了标准库 distutils，setuptools 提供兼容实现。
-try:
-    import distutils.version
-except ModuleNotFoundError:
+# Windows 先用纯 DevTools 加载 IDm，再附加 Selenium；该首屏阶段不能启动
+# ChromeDriver。macOS/Linux 维持已验证的 undetected-chromedriver 路径。
+if not IS_WIN:
+    # Python 3.12+ 移除了标准库 distutils，setuptools 提供兼容实现。
     try:
-        import setuptools._distutils as _setuptools_distutils
-        import setuptools._distutils.version as _setuptools_distutils_version
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("缺少 setuptools，无法为 Python 3.12+ 提供 distutils 兼容层。") from exc
-    sys.modules.setdefault("distutils", _setuptools_distutils)
-    sys.modules.setdefault("distutils.version", _setuptools_distutils_version)
-import undetected_chromedriver as uc
+        import distutils.version
+    except ModuleNotFoundError:
+        try:
+            import setuptools._distutils as _setuptools_distutils
+            import setuptools._distutils.version as _setuptools_distutils_version
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("缺少 setuptools，无法为 Python 3.12+ 提供 distutils 兼容层。") from exc
+        sys.modules.setdefault("distutils", _setuptools_distutils)
+        sys.modules.setdefault("distutils.version", _setuptools_distutils_version)
+    import undetected_chromedriver as uc
+else:
+    uc = None
+
+try:
+    import websocket
+except ImportError as exc:
+    raise RuntimeError("缺少 websocket-client，请重新运行启动脚本安装 Selenium 依赖。") from exc
 
 # ================= 配置 =================
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,7 +90,7 @@ CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
 # 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
 CFT_FALLBACK_VERSION = "152.0.7951.0"
 # 每次启动都会打印，用来确认没有误运行旧下载包中的脚本。
-BUILD_TAG = "2026.07.15-browser-11"
+BUILD_TAG = "2026.07.15-browser-12"
 
 # 强制直连：不读取、不探测、也不使用系统或本地代理。
 # 教务系统、镜像下载和 chromedriver 本地通信均直接连接。
@@ -97,6 +110,8 @@ ID_TISHI = "tishi"
 # 运行时填充的账号（来自 .env 或弹窗输入）
 USERNAME = ""
 PASSWORD = ""
+WINDOWS_CAPTURE_CHROME = None
+WINDOWS_CAPTURE_PROFILE = None
 
 
 def setup_proxy():
@@ -131,7 +146,10 @@ def force_kill_chrome():
             os.system("pkill -9 -f 'Google Chrome' 2>/dev/null")
             os.system("pkill -9 -f 'chromedriver' 2>/dev/null")
         elif "windows" in sysname:
-            # 不结束用户自己正在使用的 Chrome；本程序的 UC 实例由 driver.quit() 回收。
+            # 不结束用户自己正在使用的 Chrome；仅清理本程序的专用实例。
+            global WINDOWS_CAPTURE_CHROME
+            if WINDOWS_CAPTURE_CHROME and WINDOWS_CAPTURE_CHROME.poll() is None:
+                WINDOWS_CAPTURE_CHROME.terminate()
             os.system("taskkill /F /IM chromedriver.exe /T >nul 2>&1")
     except Exception:
         pass
@@ -452,33 +470,158 @@ def start_chrome_with_watchdog(options, kwargs, timeout=45):
     )
 
 
+def _free_local_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _cdp_call(ws, counter, method, params=None):
+    """向本次普通 Chrome 的 DevTools 端口发送命令，并忽略事件消息。"""
+    counter[0] += 1
+    message_id = counter[0]
+    payload = {"id": message_id, "method": method}
+    if params is not None:
+        payload["params"] = params
+    ws.send(json.dumps(payload))
+    while True:
+        response = json.loads(ws.recv())
+        if response.get("id") == message_id:
+            if "error" in response:
+                raise RuntimeError(f"DevTools {method} 失败：{response['error']}")
+            return response.get("result") or {}
+
+
+def _cdp_eval(ws, counter, expression):
+    result = _cdp_call(ws, counter, "Runtime.evaluate", {
+        "expression": expression,
+        "returnByValue": True,
+        "awaitPromise": True,
+    })
+    remote = result.get("result") or {}
+    if result.get("exceptionDetails"):
+        raise RuntimeError(f"DevTools 脚本执行失败：{expression[:80]}")
+    return remote.get("value")
+
+
+def _cdp_page_state(ws, counter):
+    raw = _cdp_eval(ws, counter, """
+        JSON.stringify({
+          url: location.href,
+          title: document.title || '',
+          htmlLength: document.documentElement ? document.documentElement.outerHTML.length : 0,
+          hasGoLogin: typeof window._goLogin === 'function',
+          hasLoginName: !!document.getElementById('loginName'),
+          hasPassword: !!document.getElementById('password'),
+          hasCaptcha: !!document.getElementById('kaptchaImage'),
+          hasPortalLogin: typeof window.portalLogin === 'function'
+        })
+    """)
+    try:
+        return json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+
+
+def _wait_for_cdp_page(ws, counter, predicate, timeout):
+    deadline = time.time() + timeout
+    latest = {}
+    while time.time() < deadline:
+        latest = _cdp_page_state(ws, counter)
+        if predicate(latest):
+            return latest
+        time.sleep(0.25)
+    return latest
+
+
 def start_windows_chrome(browser_path, driver_path, major):
-    """使用 UC 补丁驱动启动 Windows Chrome，避开 UAAAP 的空白页检测。"""
+    """先无 WebDriver 加载 IDm，表单出现后再附加 Selenium。"""
     if not browser_path or not driver_path:
         raise RuntimeError("Windows Chrome 启动缺少浏览器或 chromedriver 路径。")
 
-    options = uc.ChromeOptions()
-    options.add_argument("--disable-popup-blocking")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--no-proxy-server")
-    options.add_argument("--proxy-bypass-list=*")
-    options.add_argument("--start-maximized")
-    kwargs = {
-        "options": options,
-        "browser_executable_path": browser_path,
-        "driver_executable_path": driver_path,
-        # 独立进程仅在退出时关闭本次抓取器启动的 Chrome。
-        "use_subprocess": True,
-    }
-    if major:
-        kwargs["version_main"] = major
+    global WINDOWS_CAPTURE_CHROME, WINDOWS_CAPTURE_PROFILE
+    profile_root = os.path.join(
+        os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(),
+        "SWUScheduleExport", "chrome-profiles")
+    os.makedirs(profile_root, exist_ok=True)
+    WINDOWS_CAPTURE_PROFILE = tempfile.mkdtemp(prefix="capture-", dir=profile_root)
+    debug_port = _free_local_port()
+    command = [
+        browser_path,
+        f"--remote-debugging-port={debug_port}",
+        "--remote-allow-origins=http://localhost",
+        f"--user-data-dir={WINDOWS_CAPTURE_PROFILE}",
+        "--disable-popup-blocking",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--no-proxy-server",
+        "--proxy-bypass-list=*",
+        "--start-maximized",
+        "about:blank",
+    ]
+    log("正在以普通 Chrome 预加载统一认证与 IDm 页面 ...", "INFO")
+    WINDOWS_CAPTURE_CHROME = subprocess.Popen(
+        command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
 
-    # 已实测：普通 Selenium/DevTools 附加会在 federalEnable 跳转后得到
-    # 仅 39 字节的空页；UC 在首个导航前修补驱动，不能退回到那一路径。
+    endpoint = f"http://127.0.0.1:{debug_port}/json/list"
+    page = None
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(endpoint, timeout=2) as response:
+                pages = json.load(response)
+            page = next((item for item in pages if item.get("type") == "page"), None)
+            if page and page.get("webSocketDebuggerUrl"):
+                break
+        except Exception:
+            if WINDOWS_CAPTURE_CHROME.poll() is not None:
+                raise RuntimeError("普通 Chrome 启动后意外退出。")
+        time.sleep(0.25)
+    if not page:
+        raise TimeoutError("普通 Chrome 在 20 秒内未开放 DevTools 连接端口。")
+
+    ws = None
+    try:
+        ws = websocket.create_connection(
+            page["webSocketDebuggerUrl"], timeout=10, origin="http://localhost")
+        counter = [0]
+        _cdp_call(ws, counter, "Page.enable")
+        _cdp_call(ws, counter, "Page.navigate", {"url": URL_START})
+        state = _wait_for_cdp_page(
+            ws, counter,
+            lambda item: item.get("hasGoLogin") or item.get("hasLoginName"), 25)
+        if not state.get("hasLoginName"):
+            if not state.get("hasGoLogin"):
+                raise RuntimeError(
+                    "统一认证入口未加载可用登录按钮"
+                    f"（地址：{state.get('url', '')}，HTML：{state.get('htmlLength', 0)} 字节）")
+            log("普通 Chrome 正在从 UAAAP 跳转到 IDm ...", "INFO")
+            _cdp_eval(ws, counter, "window._goLogin(); true")
+            state = _wait_for_cdp_page(
+                ws, counter,
+                lambda item: (item.get("hasLoginName") and item.get("hasPassword")
+                              and item.get("hasCaptcha") and item.get("hasPortalLogin")), 30)
+        if not (state.get("hasLoginName") and state.get("hasPassword")
+                and state.get("hasCaptcha") and state.get("hasPortalLogin")):
+            raise RuntimeError(
+                "IDm 登录页未完整渲染，已停止避免在空白页继续"
+                f"（地址：{state.get('url', '')}，HTML：{state.get('htmlLength', 0)} 字节）")
+        log("IDm 登录页已由普通 Chrome 完整渲染", "SUCCESS")
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    options = webdriver.ChromeOptions()
+    options.debugger_address = f"127.0.0.1:{debug_port}"
+    # ChromeDriver 只在 IDm 首屏完成后附加，不能参与 UAAAP→IDm 的首次导航。
     return start_driver_with_watchdog(
-        lambda: uc.Chrome(**kwargs),
-        "undetected-chromedriver（Windows 反白屏模式）",
+        lambda: webdriver.Chrome(service=Service(driver_path), options=options),
+        "Selenium（附加已渲染的 IDm 页面）",
         timeout=45,
     )
 
@@ -953,35 +1096,22 @@ def login_procedure_legacy(driver):
 
 
 def login_procedure_windows(driver):
-    """Windows 使用带白屏检测和课表页验证的统一认证流程。"""
+    """Windows 在预加载的 IDm 表单上登录，不重新触发受拦截的首次跳转。"""
     wait = WebDriverWait(driver, 15)
     try:
-        log("正在打开统一身份认证页面 ...", "INFO")
-        if not _open_page(driver, URL_START, "统一身份认证页面"):
-            return False
-
-        # 有些入口需要先点「登录」div
-        try:
-            btn = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//div[contains(@onclick, '_goLogin')]")))
-            log("正在跳转统一身份认证页面 ...", "INFO")
-            try:
-                # 优先使用真实浏览器点击，保留跳转所需的用户手势语义。
-                btn.click()
-            except Exception:
-                # 个别页面的遮罩会拦截 Selenium 点击，沿用旧版的 DOM 点击作为后备。
-                driver.execute_script("arguments[0].click();", btn)
-        except Exception:
-            pass
-
+        log("检查已预加载的 IDm 统一认证表单 ...", "INFO")
         if not _wait_for_auth_form(driver):
-            # 外层重试会从 URL_START 重新开始，不能在 UAAAP 空白页直接 refresh。
+            # 不能用 Selenium 重新触发入口跳转，否则 IDm 会再次白屏。
             return False
-        log("统一身份认证页面已载入，正在填写登录信息 ...", "INFO")
+        log("IDm 统一认证页面已载入，正在填写登录信息 ...", "INFO")
 
         code = get_captcha(driver)
         if len(code) != 4:
-            log("验证码位数不对，将从统一认证入口重新尝试", "WARN")
+            log("验证码位数不对，将刷新 IDm 验证码后重试", "WARN")
+            try:
+                driver.execute_script("if (window.getKaptcha) window.getKaptcha();")
+            except Exception:
+                pass
             return False
 
         log("填写统一身份认证信息...", "INFO")
@@ -995,7 +1125,11 @@ def login_procedure_windows(driver):
         try:
             tishi_src = driver.find_element(By.ID, ID_TISHI).get_attribute("src") or ""
             if "code_error" in tishi_src:
-                log("验证码被拒绝，将从统一认证入口重新尝试", "WARN")
+                log("验证码被拒绝，将刷新 IDm 验证码后重试", "WARN")
+                try:
+                    driver.execute_script("if (window.getKaptcha) window.getKaptcha();")
+                except Exception:
+                    pass
                 return False
         except Exception:
             pass
@@ -1324,6 +1458,7 @@ def write_captured(html, meta):
 
 # ================= 主程序 =================
 def main():
+    global WINDOWS_CAPTURE_CHROME, WINDOWS_CAPTURE_PROFILE
     print("=" * 56)
     print("   📅  西南大学课程表自动抓取器")
     print("=" * 56)
@@ -1358,14 +1493,17 @@ def main():
         if major:
             log(f"使用 Chrome 主版本: {major}", "INFO")
         else:
-            log("未能检测 Chrome 版本，将由 undetected-chromedriver 处理浏览器", "WARN")
+            if IS_WIN:
+                log("未能检测 Chrome 版本，无法准备匹配的 Windows chromedriver", "WARN")
+            else:
+                log("未能检测 Chrome 版本，将由 undetected-chromedriver 处理浏览器", "WARN")
         driver_path = prepare_driver(major, portable_version) if major else None
         if major and not driver_path:
             raise RuntimeError("chromedriver 下载或解压失败，已停止以避免后台无提示下载。请检查上方下载日志后重试。")
 
         if IS_WIN:
             source = "项目 Chrome for Testing" if portable_version else "已安装 Chrome"
-            log(f"Windows 使用{source}的反白屏自动化路径 ...", "INFO")
+            log(f"Windows 使用{source}预加载 IDm 后再附加自动化 ...", "INFO")
             driver = start_windows_chrome(browser_path, driver_path, major)
         else:
             options = uc.ChromeOptions()
@@ -1380,7 +1518,7 @@ def main():
             if driver_path:
                 kw["driver_executable_path"] = driver_path
             driver = start_chrome_with_watchdog(options, kw)
-        # Windows 的统一认证中间页可能白屏，限制为 30 秒；macOS/Linux 保持原有 45 秒。
+        # Windows 的课表跳转限制为 30 秒；IDm 首屏已在附加 WebDriver 前完成加载。
         driver.set_page_load_timeout(30 if IS_WIN else 45)
         driver.set_script_timeout(30)
         driver.set_window_size(1100, 850)
@@ -1448,10 +1586,28 @@ def main():
                 input("  按【回车】关闭抓取用 Chrome（应用页面不受影响）...")
             except (EOFError, KeyboardInterrupt):
                 pass
+            if IS_WIN:
+                try:
+                    driver.execute_cdp_cmd("Browser.close", {})
+                except Exception:
+                    pass
             try:
                 driver.quit()
             except Exception:
                 pass
+        if IS_WIN:
+            if WINDOWS_CAPTURE_CHROME and WINDOWS_CAPTURE_CHROME.poll() is None:
+                try:
+                    WINDOWS_CAPTURE_CHROME.terminate()
+                except Exception:
+                    pass
+            if WINDOWS_CAPTURE_PROFILE:
+                try:
+                    shutil.rmtree(WINDOWS_CAPTURE_PROFILE, ignore_errors=True)
+                except Exception:
+                    pass
+            WINDOWS_CAPTURE_CHROME = None
+            WINDOWS_CAPTURE_PROFILE = None
 
 
 if __name__ == "__main__":

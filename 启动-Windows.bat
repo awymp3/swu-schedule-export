@@ -9,7 +9,7 @@ cd /d "%ROOT%"
 echo ============================================
 echo    Schedule Helper - Automatic Capture
 echo ============================================
-echo    Build: 2026.07.15-browser-11
+echo    Build: 2026.07.15-browser-12
 echo    Copyright (c) 2026 Jiapeng Lee
 echo    GitHub: https://github.com/awymp3/swu-schedule-export
 echo    Email: wadrqhh@gmail.com
@@ -64,10 +64,9 @@ if errorlevel 1 (
 
 echo Checking dependencies...
 set "NEED="
-%PY% -c "import setuptools" >nul 2>&1 || set "NEED=%NEED% setuptools"
-%PY% -c "import undetected_chromedriver as uc; raise SystemExit(0 if getattr(uc, '__version__', '') == '3.5.5' else 1)" >nul 2>&1 || set "NEED=%NEED% undetected-chromedriver==3.5.5"
 %PY% -c "import ddddocr" >nul 2>&1 || set "NEED=%NEED% ddddocr"
 %PY% -c "import selenium" >nul 2>&1 || set "NEED=%NEED% selenium"
+%PY% -c "import websocket" >nul 2>&1 || set "NEED=%NEED% websocket-client"
 %PY% -c "import PIL" >nul 2>&1 || set "NEED=%NEED% pillow"
 
 if not "%NEED%"=="" (

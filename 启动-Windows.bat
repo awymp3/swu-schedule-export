@@ -83,7 +83,7 @@ pause
 exit /b %EXITCODE%
 
 :python_download_failed
-echo [ERROR] A local Python runtime could not be downloaded.
+echo [ERROR] A local Python runtime could not be installed.
 echo Check your network, then run this file again.
 echo.
 pause
@@ -118,16 +118,33 @@ if errorlevel 1 (
 if errorlevel 1 exit /b 1
 
 echo Installing the project-local Python runtime...
-"%PYTHON_INSTALLER%" /quiet InstallAllUsers=0 TargetDir="%PYTHON_DIR%" PrependPath=0 Include_pip=1 Include_test=0 Include_doc=0 Include_tcltk=0 Include_launcher=0 Shortcuts=0
-if errorlevel 1 exit /b 1
-del /q "%PYTHON_INSTALLER%" >nul 2>&1
+REM The Python bootstrapper can spawn a child installer. start /wait prevents
+REM the next line from searching for python.exe before installation is done.
+start "" /wait "%PYTHON_INSTALLER%" /quiet InstallAllUsers=0 TargetDir="%PYTHON_DIR%" PrependPath=0 Include_pip=1 Include_test=0 Include_doc=0 Include_tcltk=0 Include_launcher=0 Shortcuts=0
+set "INSTALL_EXIT=%ERRORLEVEL%"
+if "%INSTALL_EXIT%"=="0" goto :python_installed
+if "%INSTALL_EXIT%"=="3010" goto :python_installed
+echo [ERROR] Python installer exited with code %INSTALL_EXIT%.
+echo Installer kept for diagnosis: %PYTHON_INSTALLER%
+exit /b 1
+
+:python_installed
 
 if not exist "%LOCAL_PY%" (
   for /f "delims=" %%F in ('dir /b /s "%PYTHON_DIR%\python.exe" 2^>nul') do if not defined LOCAL_PY set "LOCAL_PY=%%F"
 )
-if not defined LOCAL_PY exit /b 1
+if not defined LOCAL_PY (
+  echo [ERROR] Python installer completed, but python.exe was not found under:
+  echo         %PYTHON_DIR%
+  echo Installer kept for diagnosis: %PYTHON_INSTALLER%
+  exit /b 1
+)
 "%LOCAL_PY%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
-if errorlevel 1 exit /b 1
+if errorlevel 1 (
+  echo [ERROR] Installed python.exe could not start: %LOCAL_PY%
+  exit /b 1
+)
+del /q "%PYTHON_INSTALLER%" >nul 2>&1
 exit /b 0
 
 :download_file

@@ -57,6 +57,8 @@ except ModuleNotFoundError:
 
 import undetected_chromedriver as uc
 import ddddocr
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -218,7 +220,19 @@ def find_chrome_executable():
 
 
 def detect_chrome_version(executable=None):
-    """检测本机 Chrome 主版本号；未指定路径时自动查找。"""
+    """检测本机 Chrome 主版本号；Windows 不通过启动 chrome.exe 查询版本。"""
+    if IS_WIN:
+        for key in (r"HKEY_CURRENT_USER\Software\Google\Chrome\BLBeacon",
+                    r"HKEY_LOCAL_MACHINE\Software\Google\Chrome\BLBeacon"):
+            try:
+                out = subprocess.check_output(f'reg query "{key}" /v version', shell=True,
+                                              stderr=subprocess.DEVNULL).decode(errors="ignore")
+                match = re.search(r"(\d+)\.\d+\.\d+", out)
+                if match:
+                    return int(match.group(1))
+            except Exception:
+                pass
+        return None
     return _chrome_major(executable or find_chrome_executable())
 
 
@@ -450,6 +464,26 @@ def start_chrome_with_watchdog(options, kwargs, timeout=45):
     """macOS/Linux 保留 undetected-chromedriver 启动方式。"""
     return start_driver_with_watchdog(
         lambda: uc.Chrome(options=options, **kwargs), "undetected-chromedriver", timeout
+    )
+
+
+def start_portable_windows_chrome(browser_path, driver_path):
+    """项目 Chrome for Testing 与同版本驱动直接配对，不经过 UC 的补丁流程。"""
+    if not browser_path or not driver_path:
+        raise RuntimeError("项目 Chrome 启动缺少浏览器或 chromedriver 路径。")
+    options = webdriver.ChromeOptions()
+    options.binary_location = browser_path
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    # Chrome for Testing 与 chromedriver 是严格同版本配套的，直接使用 Selenium。
+    # 这里可以安全放入看门狗线程：Selenium 通过本地 HTTP 通信，不依赖 UC 的主线程补丁流程。
+    # 因此浏览器或驱动异常时，终端会持续显示连接进度，并在超时后明确退出。
+    return start_driver_with_watchdog(
+        lambda: webdriver.Chrome(service=Service(driver_path), options=options),
+        "Selenium（项目 Chrome for Testing）",
+        timeout=45,
     )
 
 
@@ -1180,9 +1214,12 @@ def main():
             browser_path, portable_version = download_portable_chrome()
             if not browser_path:
                 raise RuntimeError("未检测到系统 Chrome，且项目专用 Chrome for Testing 下载失败。")
-        major = detect_chrome_version(browser_path)
-        if not major and portable_version:
+        # Chrome for Testing 的完整版本来自镜像目录；不要运行 chrome.exe --version，
+        # Windows 下它可能保持前台进程，导致自动化在此处无限等待。
+        if portable_version:
             major = int(portable_version.split(".")[0])
+        else:
+            major = detect_chrome_version(browser_path)
         if major:
             log(f"使用 Chrome 主版本: {major}", "INFO")
         else:
@@ -1193,27 +1230,27 @@ def main():
 
         if IS_WIN and not portable_version:
             log("Windows 使用已安装 Chrome 的自动化路径 ...", "INFO")
-        options = uc.ChromeOptions()
-        options.add_argument("--disable-popup-blocking")
-        options.add_argument("--no-first-run")
-        options.add_argument("--no-default-browser-check")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        kw = {}
-        if major:
-            kw["version_main"] = major
-        if driver_path:
-            kw["driver_executable_path"] = driver_path
-        # 原先可用的 Windows 路径由 UC 自行定位系统 Chrome；仅项目浏览器兜底时显式传路径。
-        if portable_version:
-            kw["browser_executable_path"] = browser_path
-        if IS_WIN:
-            # 保持旧版已验证行为：UC 必须在主线程创建，不能放入启动看门狗线程。
-            log("正在启动并接管 Chrome ...", "INFO")
-            driver = uc.Chrome(options=options, **kw)
-            log("Chrome 已由自动化驱动接管", "SUCCESS")
+        if IS_WIN and portable_version:
+            driver = start_portable_windows_chrome(browser_path, driver_path)
         else:
-            driver = start_chrome_with_watchdog(options, kw)
+            options = uc.ChromeOptions()
+            options.add_argument("--disable-popup-blocking")
+            options.add_argument("--no-first-run")
+            options.add_argument("--no-default-browser-check")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            kw = {}
+            if major:
+                kw["version_main"] = major
+            if driver_path:
+                kw["driver_executable_path"] = driver_path
+            # 保持旧版已验证行为：UC 必须在主线程创建，不能放入启动看门狗线程。
+            if IS_WIN:
+                log("正在启动并接管 Chrome ...", "INFO")
+                driver = uc.Chrome(options=options, **kw)
+                log("Chrome 已由自动化驱动接管", "SUCCESS")
+            else:
+                driver = start_chrome_with_watchdog(options, kw)
         driver.set_page_load_timeout(45)
         driver.set_script_timeout(30)
         driver.set_window_size(1100, 850)

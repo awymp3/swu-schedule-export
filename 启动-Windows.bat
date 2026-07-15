@@ -65,14 +65,14 @@ set "NEED="
 
 if not "%NEED%"=="" (
   echo Installing required packages from the Tsinghua mirror:%NEED%
-  %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --timeout 30 --retries 3 --index-url "%PIP_TUNA%" %NEED%
+  %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_TUNA%" %NEED%
   if errorlevel 1 (
     echo Tsinghua mirror failed. Retrying with the Aliyun mirror...
-    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --timeout 30 --retries 3 --index-url "%PIP_ALIYUN%" %NEED%
+    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_ALIYUN%" %NEED%
   )
   if errorlevel 1 (
     echo China mirrors failed. Retrying with the official PyPI source...
-    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --timeout 30 --retries 3 %NEED%
+    %PY% -m pip install %PIP_SCOPE% --disable-pip-version-check --prefer-binary --progress-bar on --timeout 30 --retries 3 %NEED%
   )
   if errorlevel 1 (
     echo [ERROR] Dependencies could not be installed. Check your network, then retry.
@@ -167,15 +167,16 @@ if errorlevel 1 (
 )
 set "GET_PIP=%RUNTIME_DIR%\get-pip.py"
 echo Installing pip for the project-local Python runtime...
+echo This first-time setup may take a few minutes. Download progress is shown below.
 call :download_file "https://bootstrap.pypa.io/get-pip.py" "%GET_PIP%"
 if errorlevel 1 (
   echo [ERROR] Could not download the pip bootstrap script.
   exit /b 1
 )
-"%LOCAL_PY%" "%GET_PIP%" --no-warn-script-location --index-url "%PIP_TUNA%"
+"%LOCAL_PY%" "%GET_PIP%" --no-warn-script-location --disable-pip-version-check --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_TUNA%"
 if errorlevel 1 (
   echo Tsinghua mirror failed while installing pip. Retrying with the Aliyun mirror...
-  "%LOCAL_PY%" "%GET_PIP%" --no-warn-script-location --index-url "%PIP_ALIYUN%"
+  "%LOCAL_PY%" "%GET_PIP%" --no-warn-script-location --disable-pip-version-check --progress-bar on --timeout 30 --retries 3 --index-url "%PIP_ALIYUN%"
 )
 if errorlevel 1 (
   echo [ERROR] pip could not be installed for the project-local Python runtime.

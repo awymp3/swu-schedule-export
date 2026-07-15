@@ -60,6 +60,7 @@ import ddddocr
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -76,7 +77,7 @@ CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
 # 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
 CFT_FALLBACK_VERSION = "152.0.7951.0"
 # 每次启动都会打印，用来确认没有误运行旧下载包中的脚本。
-BUILD_TAG = "2026.07.15-browser-4"
+BUILD_TAG = "2026.07.15-browser-5"
 
 # 强制直连：不读取、不探测、也不使用系统或本地代理。
 # 教务系统、镜像下载和 chromedriver 本地通信均直接连接。
@@ -825,27 +826,103 @@ def get_captcha(driver):
         return ""
 
 
+def _page_snapshot(driver):
+    """返回当前页的可诊断状态；白屏时也不能让诊断本身再次抛异常。"""
+    try:
+        return driver.execute_script("""
+            var body = document.body;
+            return {
+              url: location.href,
+              title: document.title || '',
+              ready: document.readyState || '',
+              bodyLength: body ? (body.innerText || body.textContent || '').trim().length : 0
+            };
+        """) or {}
+    except Exception:
+        return {"url": getattr(driver, "current_url", "")}
+
+
+def _open_page(driver, url, label):
+    """打开页面并在超时时停止加载，防止 SSO 白屏把流程无限卡住。"""
+    try:
+        driver.get(url)
+        return True
+    except TimeoutException:
+        log(f"{label}加载超过限制，已停止本次加载并检查页面状态", "WARN")
+        try:
+            driver.execute_script("window.stop();")
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        log(f"打开{label}失败：{exc}", "WARN")
+        return False
+
+
+def _wait_for_auth_form(driver, timeout=15):
+    """等待统一认证表单。没有表单即视为 UAAAP 跳转失败，而非登录成功。"""
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.visibility_of_element_located((By.ID, ID_USER)))
+        return True
+    except Exception:
+        state = _page_snapshot(driver)
+        log("统一认证跳转后未出现登录表单"
+            f"（地址：{state.get('url', '')}，正文：{state.get('bodyLength', 0)} 字符）", "WARN")
+        return False
+
+
+def open_authenticated_schedule(driver, timeout=15):
+    """从 SSO 跳转后直接验证课表页，避免停留在 UAAAP 的中间白屏页。"""
+    for attempt in range(1, 3):
+        log(f"正在验证教务登录并打开课表（{attempt}/2）...", "INFO")
+        if not _open_page(driver, URL_KEBIAO, "课表页面"):
+            continue
+        try:
+            WebDriverWait(driver, timeout).until(
+                lambda d: d.find_elements(By.ID, "xnm") or d.find_elements(By.ID, "ajaxForm"))
+            log("课表页面已验证", "SUCCESS")
+            return True
+        except Exception:
+            state = _page_snapshot(driver)
+            log("课表页未加载完成，未将本次跳转视为登录成功"
+                f"（地址：{state.get('url', '')}，正文：{state.get('bodyLength', 0)} 字符）", "WARN")
+            try:
+                driver.execute_script("window.stop();")
+            except Exception:
+                pass
+    return False
+
+
 def login_procedure(driver):
     wait = WebDriverWait(driver, 15)
     try:
         log("正在打开统一身份认证页面 ...", "INFO")
-        driver.get(URL_START)
-        log("统一身份认证页面已载入，正在填写登录信息 ...", "INFO")
-        time.sleep(3)
+        if not _open_page(driver, URL_START, "统一身份认证页面"):
+            return False
 
         # 有些入口需要先点「登录」div
         try:
             btn = wait.until(EC.element_to_be_clickable(
                 (By.XPATH, "//div[contains(@onclick, '_goLogin')]")))
-            driver.execute_script("arguments[0].click();", btn)
+            log("正在跳转统一身份认证页面 ...", "INFO")
+            try:
+                # 优先使用真实浏览器点击，保留跳转所需的用户手势语义。
+                btn.click()
+            except Exception:
+                # 个别页面的遮罩会拦截 Selenium 点击，沿用旧版的 DOM 点击作为后备。
+                driver.execute_script("arguments[0].click();", btn)
         except Exception:
             pass
-        time.sleep(3)
+
+        if not _wait_for_auth_form(driver):
+            # 外层重试会从 URL_START 重新开始，不能在 UAAAP 空白页直接 refresh。
+            return False
+        log("统一身份认证页面已载入，正在填写登录信息 ...", "INFO")
 
         code = get_captcha(driver)
         if len(code) != 4:
-            log("验证码位数不对，刷新重试", "WARN")
-            driver.refresh()
+            log("验证码位数不对，将从统一认证入口重新尝试", "WARN")
             return False
 
         log("填写统一身份认证信息...", "INFO")
@@ -859,20 +936,26 @@ def login_procedure(driver):
         try:
             tishi_src = driver.find_element(By.ID, ID_TISHI).get_attribute("src") or ""
             if "code_error" in tishi_src:
-                log("验证码被拒绝", "WARN")
-                driver.refresh()
+                log("验证码被拒绝，将从统一认证入口重新尝试", "WARN")
                 return False
         except Exception:
             pass
 
         log("提交登录请求...", "INFO")
+        submit_url = driver.current_url
         driver.execute_script("portalLogin();")
-        time.sleep(5)
-
-        if "login" not in driver.current_url:
+        # 等待表单提交真正离开当前页，避免立即访问课表页而中断 UAAAP 的认证请求。
+        try:
+            WebDriverWait(driver, 10).until(
+                lambda d: d.current_url != submit_url or not d.find_elements(By.ID, ID_USER))
+        except Exception:
+            log("统一认证仍在处理，继续验证课表登录状态", "INFO")
+        time.sleep(1)
+        # 不能只看 URL：UAAAP 中间页白屏时 URL 也可能已经不含 login。
+        if open_authenticated_schedule(driver):
             log("登录成功！", "SUCCESS")
             return True
-        log("登录未跳转，可能密码/验证码错误", "WARN")
+        log("登录后未能验证课表页，可能密码/验证码错误或统一认证跳转白屏", "WARN")
         return False
     except Exception as e:
         log(f"登录流程出错: {e}", "ERROR")
@@ -1244,7 +1327,8 @@ def main():
                 log("Chrome 已由自动化驱动接管", "SUCCESS")
             else:
                 driver = start_chrome_with_watchdog(options, kw)
-        driver.set_page_load_timeout(45)
+        # 统一认证中间页异常时最多等待 30 秒；_open_page 会停止加载并转入重试。
+        driver.set_page_load_timeout(30)
         driver.set_script_timeout(30)
         driver.set_window_size(1100, 850)
 
@@ -1261,10 +1345,8 @@ def main():
             log("如统一身份认证信息已变更，请删除 .env 后重试", "INFO")
             return
 
-        # 进入课表页
-        log("跳转课表页面...", "INFO")
-        driver.get(URL_KEBIAO)
-        time.sleep(4)
+        # login_procedure 已直接打开并验证课表页；不再重复经过可能白屏的 SSO 中间跳转。
+        log("课表页面已就绪，读取学年和学期选项...", "INFO")
 
         # 正方将学年和学期分成两个独立选项；先查询用户实际选择的那一份课表。
         term_info = choose_academic_term(driver)

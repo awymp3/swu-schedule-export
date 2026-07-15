@@ -9,7 +9,7 @@ cd /d "%ROOT%"
 echo ============================================
 echo    Schedule Helper - Automatic Capture
 echo ============================================
-echo    Build: 2026.07.15-browser-4
+echo    Build: 2026.07.15-browser-5
 echo    Copyright (c) 2026 Jiapeng Lee
 echo    GitHub: https://github.com/awymp3/swu-schedule-export
 echo    Email: wadrqhh@gmail.com

@@ -77,7 +77,7 @@ CFT_OFFICIAL = "https://storage.googleapis.com/chrome-for-testing-public"
 # 当镜像目录短暂不可访问时仍可尝试该已验证版本；目录恢复后优先使用最新版本。
 CFT_FALLBACK_VERSION = "152.0.7951.0"
 # 每次启动都会打印，用来确认没有误运行旧下载包中的脚本。
-BUILD_TAG = "2026.07.15-browser-5"
+BUILD_TAG = "2026.07.15-browser-6"
 
 # 强制直连：不读取、不探测、也不使用系统或本地代理。
 # 教务系统、镜像下载和 chromedriver 本地通信均直接连接。
@@ -894,7 +894,58 @@ def open_authenticated_schedule(driver, timeout=15):
     return False
 
 
-def login_procedure(driver):
+def login_procedure_legacy(driver):
+    """保留 macOS/Linux 已验证的原始统一认证流程。"""
+    wait = WebDriverWait(driver, 15)
+    try:
+        driver.get(URL_START)
+        time.sleep(3)
+
+        try:
+            btn = wait.until(EC.element_to_be_clickable(
+                (By.XPATH, "//div[contains(@onclick, '_goLogin')]")))
+            driver.execute_script("arguments[0].click();", btn)
+        except Exception:
+            pass
+        time.sleep(3)
+
+        code = get_captcha(driver)
+        if len(code) != 4:
+            log("验证码位数不对，刷新重试", "WARN")
+            driver.refresh()
+            return False
+
+        log("填写统一身份认证信息...", "INFO")
+        driver.execute_script(f"document.getElementById('{ID_USER}').value=arguments[0];", USERNAME)
+        driver.execute_script(f"document.getElementById('{ID_PWD}').value=arguments[0];", PASSWORD)
+        driver.execute_script(f"document.getElementById('{ID_CODE}').value=arguments[0];", code)
+        driver.execute_script("verifyCode();")
+        time.sleep(1)
+
+        try:
+            tishi_src = driver.find_element(By.ID, ID_TISHI).get_attribute("src") or ""
+            if "code_error" in tishi_src:
+                log("验证码被拒绝", "WARN")
+                driver.refresh()
+                return False
+        except Exception:
+            pass
+
+        log("提交登录请求...", "INFO")
+        driver.execute_script("portalLogin();")
+        time.sleep(5)
+        if "login" not in driver.current_url:
+            log("登录成功！", "SUCCESS")
+            return True
+        log("登录未跳转，可能密码/验证码错误", "WARN")
+        return False
+    except Exception as exc:
+        log(f"登录流程出错: {exc}", "ERROR")
+        return False
+
+
+def login_procedure_windows(driver):
+    """Windows 使用带白屏检测和课表页验证的统一认证流程。"""
     wait = WebDriverWait(driver, 15)
     try:
         log("正在打开统一身份认证页面 ...", "INFO")
@@ -960,6 +1011,11 @@ def login_procedure(driver):
     except Exception as e:
         log(f"登录流程出错: {e}", "ERROR")
         return False
+
+
+def login_procedure(driver):
+    """按平台选择认证流程，避免影响 macOS/Linux 已验证的路径。"""
+    return login_procedure_windows(driver) if IS_WIN else login_procedure_legacy(driver)
 
 
 # ================= 学年 / 学期选择与课表抓取 =================
@@ -1327,8 +1383,8 @@ def main():
                 log("Chrome 已由自动化驱动接管", "SUCCESS")
             else:
                 driver = start_chrome_with_watchdog(options, kw)
-        # 统一认证中间页异常时最多等待 30 秒；_open_page 会停止加载并转入重试。
-        driver.set_page_load_timeout(30)
+        # Windows 的统一认证中间页可能白屏，限制为 30 秒；macOS/Linux 保持原有 45 秒。
+        driver.set_page_load_timeout(30 if IS_WIN else 45)
         driver.set_script_timeout(30)
         driver.set_window_size(1100, 850)
 
@@ -1345,8 +1401,14 @@ def main():
             log("如统一身份认证信息已变更，请删除 .env 后重试", "INFO")
             return
 
-        # login_procedure 已直接打开并验证课表页；不再重复经过可能白屏的 SSO 中间跳转。
-        log("课表页面已就绪，读取学年和学期选项...", "INFO")
+        if IS_WIN:
+            # Windows 已在登录流程中直接打开并验证课表页，避免回到 UAAAP 中间白屏。
+            log("课表页面已就绪，读取学年和学期选项...", "INFO")
+        else:
+            # 保留 macOS/Linux 之前已验证可用的跳转时机和等待方式。
+            log("跳转课表页面...", "INFO")
+            driver.get(URL_KEBIAO)
+            time.sleep(4)
 
         # 正方将学年和学期分成两个独立选项；先查询用户实际选择的那一份课表。
         term_info = choose_academic_term(driver)

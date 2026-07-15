@@ -6,6 +6,7 @@ account.json
 captured.js
 drivers/
 .runtime/
+browsers/
 _captcha_debug.png
 __pycache__/
 *.pyc

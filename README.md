@@ -97,10 +97,6 @@ chmod +x 启动-Mac.command
 | `SECURITY.md` | 统一身份认证信息、数据和安全使用说明 |
 | `THIRD_PARTY_NOTICES.md` | 运行时第三方组件及许可证说明 |
 
-## 贡献者
-
-- Windows 端测试：Oscar Jin <oscarjin267@gmail.com>
-
 ## 开源许可
 
 本项目采用 [MIT License](LICENSE)。运行时下载的 Selenium、undetected-chromedriver、ddddocr、Pillow 和 uv 等组件分别适用各自的许可证，详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -20,6 +20,13 @@ set "PYTHON_OFFICIAL=https://www.python.org/ftp/python/%PYTHON_VERSION%"
 
 set "PY="
 set "PIP_SCOPE=--user"
+set "NEED_X64=0"
+if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "NEED_X64=1"
+if /I "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "NEED_X64=1"
+
+REM OpenCV has no reliable Windows ARM64 wheel. Windows on ARM can run x64
+REM applications, so use an x64 project runtime and avoid source builds.
+if "%NEED_X64%"=="1" goto :install_local_runtime
 
 REM Prefer a usable Python 3 over the Microsoft Store python.exe alias.
 py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
@@ -31,6 +38,8 @@ if not errorlevel 1 set "PY=python"
 if defined PY goto :python_ready
 
 REM No system Python: reuse or download a project-local runtime in .runtime.
+:install_local_runtime
+if "%NEED_X64%"=="1" echo Windows on ARM detected. Using an x64 local Python runtime for OpenCV compatibility...
 call :install_local_python
 if errorlevel 1 goto :python_download_failed
 set "PY="%LOCAL_PY%""
@@ -93,24 +102,15 @@ exit /b 1
 set "RUNTIME_DIR=%ROOT%.runtime"
 set "PYTHON_DIR=%RUNTIME_DIR%\python"
 set "LOCAL_PY=%PYTHON_DIR%\python.exe"
-if exist "%LOCAL_PY%" (
-  "%LOCAL_PY%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
-  if not errorlevel 1 (
-    "%LOCAL_PY%" -m pip --version >nul 2>&1
-    if not errorlevel 1 exit /b 0
-    call :bootstrap_local_pip
-    exit /b %ERRORLEVEL%
-  )
-)
+call :local_runtime_is_usable
+if not errorlevel 1 exit /b 0
 set "LOCAL_PY="
 
 mkdir "%RUNTIME_DIR%" >nul 2>&1
 echo Python 3 was not found. Downloading a local runtime from the Aliyun mirror...
 
 set "PYTHON_ARCH=amd64"
-if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "PYTHON_ARCH=arm64"
-if /I "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "PYTHON_ARCH=arm64"
-if /I "%PROCESSOR_ARCHITECTURE%"=="x86" set "PYTHON_ARCH=win32"
+if "%NEED_X64%"=="0" if /I "%PROCESSOR_ARCHITECTURE%"=="x86" set "PYTHON_ARCH=win32"
 set "PYTHON_ARCHIVE_NAME=python-%PYTHON_VERSION%-embed-%PYTHON_ARCH%.zip"
 set "PYTHON_ARCHIVE=%RUNTIME_DIR%\%PYTHON_ARCHIVE_NAME%"
 
@@ -145,6 +145,19 @@ if errorlevel 1 (
 call :bootstrap_local_pip
 if errorlevel 1 exit /b 1
 exit /b 0
+
+:local_runtime_is_usable
+if not exist "%LOCAL_PY%" exit /b 1
+"%LOCAL_PY%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
+if errorlevel 1 exit /b 1
+if "%NEED_X64%"=="1" (
+  "%LOCAL_PY%" -c "import platform; raise SystemExit(0 if platform.machine().lower() in ('amd64', 'x86_64') else 1)" >nul 2>&1
+  if errorlevel 1 exit /b 1
+)
+"%LOCAL_PY%" -m pip --version >nul 2>&1
+if not errorlevel 1 exit /b 0
+call :bootstrap_local_pip
+exit /b %ERRORLEVEL%
 
 :bootstrap_local_pip
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; try { $pth = Get-ChildItem -LiteralPath $env:PYTHON_DIR -Filter 'python*._pth' | Select-Object -First 1; if (-not $pth) { exit 1 }; $lines = Get-Content -LiteralPath $pth.FullName | ForEach-Object { if ($_ -match '^\s*#\s*import site\s*$') { 'import site' } else { $_ } }; Set-Content -LiteralPath $pth.FullName -Value $lines -Encoding ascii; exit 0 } catch { exit 1 }"
